@@ -643,7 +643,7 @@ function LoginScreen({ onLogin }) {
     </Card>
   );
 
-const GreetingCard = ({ userName, children }: any) => {
+const GreetingCard = ({ userName, children, isCloudConnected }: any) => {
   const hour = new Date().getHours();
   let greeting = '';
   let emoji = '';
@@ -672,7 +672,19 @@ const GreetingCard = ({ userName, children }: any) => {
   return (
     <div className="w-full bg-[#151B26]/60 backdrop-blur-md border border-[#00D4FF]/20 p-5 sm:p-6 rounded-2xl shadow-lg animation-fade-in relative overflow-hidden flex flex-col md:flex-row justify-between items-start md:items-center gap-5 md:gap-4 mb-4 sm:mb-6">
       <div className="absolute top-0 right-0 w-64 h-full bg-gradient-to-l from-[#00D4FF]/5 to-transparent pointer-events-none"></div>
-      <div className="flex items-center gap-4 sm:gap-5 relative z-10 w-full">
+      
+      {/* Status Cloud Real-time Badge */}
+      <div className="absolute top-3 right-4 sm:top-4 sm:right-5 z-20 flex items-center gap-1.5 bg-[#0B0F19]/60 px-2.5 py-1 rounded-full border border-gray-700/50 backdrop-blur-md shadow-sm">
+         <span className="flex h-2 w-2 relative">
+            {isCloudConnected && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
+            <span className={`relative inline-flex rounded-full h-2 w-2 ${isCloudConnected ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+         </span>
+         <span className={`text-[9px] font-bold uppercase tracking-wider ${isCloudConnected ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {isCloudConnected ? 'Cloud Connected' : 'Offline Mode'}
+         </span>
+      </div>
+
+      <div className="flex items-center gap-4 sm:gap-5 relative z-10 w-full mt-5 sm:mt-0">
         <div className="text-4xl sm:text-5xl drop-shadow-[0_0_15px_rgba(255,255,255,0.3)] select-none">
           {emoji}
         </div>
@@ -694,7 +706,7 @@ const GreetingCard = ({ userName, children }: any) => {
   );
 };
 
-const StudentDashboard = ({ db, user, setActiveTab, today }) => {
+const StudentDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any) => {
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
@@ -751,7 +763,7 @@ const StudentDashboard = ({ db, user, setActiveTab, today }) => {
   return (
      <div className="space-y-8 w-full max-w-full overflow-hidden animation-fade-in pb-8 font-sans">
         
-        <GreetingCard userName={user?.name} />
+        <GreetingCard userName={user?.name} isCloudConnected={isCloudConnected} />
 
         {/* TOP HERO SECTION */}
         <div className="bg-gradient-to-br from-[#0A3D91] to-[#051126] border border-[#00D4FF]/30 p-6 sm:p-10 rounded-[20px] shadow-2xl relative overflow-hidden flex flex-col md:flex-row justify-between items-start md:items-center gap-8 -mt-2">
@@ -912,7 +924,7 @@ const StudentDashboard = ({ db, user, setActiveTab, today }) => {
   );
 };
 
-const AdminDashboard = ({ db, user, setActiveTab, today }) => {
+const AdminDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any) => {
   const getActiveCount = (collection) => (db[collection] || []).filter((item) => item.status === 'Active' || item.active === 'Active').length;
   
   const totalStudents = getActiveCount('students');
@@ -947,7 +959,7 @@ const AdminDashboard = ({ db, user, setActiveTab, today }) => {
 
   return (
     <div className="space-y-4 sm:space-y-6 animation-fade-in w-full max-w-full overflow-hidden font-sans">
-      <GreetingCard userName={user?.name}>
+      <GreetingCard userName={user?.name} isCloudConnected={isCloudConnected}>
          <Button onClick={() => setActiveTab('students')} icon={Plus} className="w-full sm:w-auto min-h-[44px] justify-center shadow-[0_0_20px_rgba(0,212,255,0.3)]">Add New Student</Button>
       </GreetingCard>
 
@@ -1073,7 +1085,7 @@ const AdminDashboard = ({ db, user, setActiveTab, today }) => {
   );
 };
 
-const TutorDashboard = ({ db, user, setActiveTab, today }) => {
+const TutorDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any) => {
   const dObj = new Date();
   const currentMonth = String(dObj.getMonth() + 1);
   const currentYear = String(dObj.getFullYear());
@@ -1112,7 +1124,7 @@ const TutorDashboard = ({ db, user, setActiveTab, today }) => {
 
   return (
     <div className="space-y-4 sm:space-y-6 animation-fade-in w-full max-w-full overflow-hidden font-sans">
-      <GreetingCard userName={user?.name} />
+      <GreetingCard userName={user?.name} isCloudConnected={isCloudConnected} />
 
       {/* First Row 4 Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
@@ -1232,15 +1244,15 @@ const TutorDashboard = ({ db, user, setActiveTab, today }) => {
   );
 };
 
-const Dashboard = ({ db, user, setActiveTab }) => {
+const Dashboard = ({ db, user, setActiveTab, isCloudConnected }: any) => {
   const today = new Date().toISOString().split('T')[0];
   if (user.role === 'student') {
-    return <StudentDashboard db={db} user={user} setActiveTab={setActiveTab} today={today} />;
+    return <StudentDashboard db={db} user={user} setActiveTab={setActiveTab} today={today} isCloudConnected={isCloudConnected} />;
   }
   if (user.role === 'tutor') {
-    return <TutorDashboard db={db} user={user} setActiveTab={setActiveTab} today={today} />;
+    return <TutorDashboard db={db} user={user} setActiveTab={setActiveTab} today={today} isCloudConnected={isCloudConnected} />;
   }
-  return <AdminDashboard db={db} user={user} setActiveTab={setActiveTab} today={today} />;
+  return <AdminDashboard db={db} user={user} setActiveTab={setActiveTab} today={today} isCloudConnected={isCloudConnected} />;
 };
 
 export default function App() {
@@ -1255,6 +1267,10 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [logoutConfirm, setLogoutConfirm] = useState(false);
+  
+  // State untuk Cloud Connection
+  const [isCloudConnected, setIsCloudConnected] = useState(true);
+  const prevCloudState = useRef(true);
 
   // Set browser tab title
   useEffect(() => {
@@ -1270,11 +1286,13 @@ export default function App() {
           if (data && data.students) {
             setDb(data);
             localStorage.setItem('ecg_db', JSON.stringify(data));
+            setIsCloudConnected(true);
             return;
           }
         }
       } catch (e) {
         console.warn('Koneksi cloud gagal, menggunakan Local Storage', e);
+        setIsCloudConnected(false);
       }
 
       const saved = localStorage.getItem('ecg_db');
@@ -1303,7 +1321,12 @@ export default function App() {
           mode: 'no-cors',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({ action: 'sync', payload: db }),
-        }).catch((e) => console.warn('GAS Sync failed', e));
+        })
+        .then(() => setIsCloudConnected(true))
+        .catch((e) => {
+           console.warn('GAS Sync failed', e);
+           setIsCloudConnected(false);
+        });
       }
     }
   }, [db]);
@@ -1312,6 +1335,18 @@ export default function App() {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
   };
+
+  // Effect khusus untuk memunculkan notifikasi perubahan status cloud
+  useEffect(() => {
+    if (prevCloudState.current !== isCloudConnected) {
+      if (isCloudConnected) {
+        showToast('Cloud connection restored.', 'success');
+      } else {
+        showToast('Cloud connection lost. Running in offline mode.', 'warning');
+      }
+      prevCloudState.current = isCloudConnected;
+    }
+  }, [isCloudConnected]);
 
   const requestConfirm = (title, message, onConfirm) => {
     setConfirmDialog({
@@ -1487,7 +1522,7 @@ export default function App() {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard db={db} user={currentUser} setActiveTab={setActiveTab} />;
+        return <Dashboard db={db} user={currentUser} setActiveTab={setActiveTab} isCloudConnected={isCloudConnected} />;
       case 'students':
         return <StudentsModule db={db} setDb={setDb} generateId={generateId} showToast={showToast} softDelete={softDelete} user={currentUser} />;
       case 'tutors':
