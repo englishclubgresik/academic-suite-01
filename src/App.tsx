@@ -43,7 +43,9 @@ import {
   User,
   Award,
   QrCode,
-  Quote
+  Quote,
+  Cloud,
+  CloudOff
 } from 'lucide-react';
 
 declare global {
@@ -670,21 +672,11 @@ const GreetingCard = ({ userName, children, isCloudConnected }: any) => {
   const displayName = userName ? userName.split(' ')[0] : 'User';
 
   return (
-    <div className="w-full bg-[#151B26]/60 backdrop-blur-md border border-[#00D4FF]/20 p-5 sm:p-6 rounded-2xl shadow-lg animation-fade-in relative overflow-hidden flex flex-col md:flex-row justify-between items-start md:items-center gap-5 md:gap-4 mb-4 sm:mb-6">
+    <div className="w-full bg-[#151B26]/60 backdrop-blur-md border border-[#00D4FF]/20 p-5 sm:p-6 rounded-2xl shadow-lg animation-fade-in relative overflow-hidden flex flex-col md:flex-row justify-between items-start md:items-center gap-5 md:gap-6 mb-4 sm:mb-6">
       <div className="absolute top-0 right-0 w-64 h-full bg-gradient-to-l from-[#00D4FF]/5 to-transparent pointer-events-none"></div>
       
-      {/* Status Cloud Real-time Badge */}
-      <div className="absolute top-3 right-4 sm:top-4 sm:right-5 z-20 flex items-center gap-1.5 bg-[#0B0F19]/60 px-2.5 py-1 rounded-full border border-gray-700/50 backdrop-blur-md shadow-sm">
-         <span className="flex h-2 w-2 relative">
-            {isCloudConnected && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
-            <span className={`relative inline-flex rounded-full h-2 w-2 ${isCloudConnected ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
-         </span>
-         <span className={`text-[9px] font-bold uppercase tracking-wider ${isCloudConnected ? 'text-emerald-400' : 'text-rose-400'}`}>
-            {isCloudConnected ? 'Cloud Connected' : 'Offline Mode'}
-         </span>
-      </div>
-
-      <div className="flex items-center gap-4 sm:gap-5 relative z-10 w-full mt-5 sm:mt-0">
+      {/* KIRI: Sapaan */}
+      <div className="flex items-center gap-4 sm:gap-5 relative z-10 w-full md:w-auto">
         <div className="text-4xl sm:text-5xl drop-shadow-[0_0_15px_rgba(255,255,255,0.3)] select-none">
           {emoji}
         </div>
@@ -697,11 +689,39 @@ const GreetingCard = ({ userName, children, isCloudConnected }: any) => {
           </p>
         </div>
       </div>
-      {children && (
-        <div className="relative z-10 w-full md:w-auto mt-2 md:mt-0">
-          {children}
+
+      {/* KANAN: Cloud Status & Children (misal: tombol Add Student) */}
+      <div className="relative z-10 w-full md:w-auto flex flex-col md:items-end gap-3 sm:gap-4">
+        
+        {/* Status Cloud Real-time Badge (Modern UI) */}
+        <div className={`flex items-center gap-3 px-4 py-2 sm:py-2.5 rounded-xl border backdrop-blur-md transition-all duration-500 shadow-sm w-full md:w-auto justify-start md:justify-center ${
+            isCloudConnected 
+            ? 'bg-emerald-500/10 border-emerald-500/20 shadow-[0_0_15px_rgba(16,185,129,0.1)]' 
+            : 'bg-rose-500/10 border-rose-500/20 shadow-[0_0_15px_rgba(244,63,94,0.1)]'
+        }`}>
+           <div className="relative flex items-center justify-center">
+              {isCloudConnected ? <Cloud className="text-emerald-400" size={20} /> : <CloudOff className="text-rose-400" size={20} />}
+              <span className="absolute -bottom-0.5 -right-0.5 flex h-2.5 w-2.5">
+                  {isCloudConnected && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
+                  <span className={`relative inline-flex rounded-full h-2.5 w-2.5 border-2 border-[#151B26] ${isCloudConnected ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+              </span>
+           </div>
+           <div className="flex flex-col">
+              <span className="text-[10px] sm:text-xs text-gray-400 font-medium leading-none mb-1 text-left">Cloud Status</span>
+              <span className={`text-sm sm:text-base font-semibold leading-none flex items-center gap-1.5 ${isCloudConnected ? 'text-emerald-400' : 'text-rose-400'}`}>
+                 {isCloudConnected ? 'Connected' : 'Offline Mode'}
+                 {isCloudConnected ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+              </span>
+           </div>
         </div>
-      )}
+
+        {/* Children Render (Tutor Tasks, Add New Student, dll) */}
+        {children && (
+          <div className="w-full">
+            {children}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
