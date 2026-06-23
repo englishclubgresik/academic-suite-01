@@ -628,7 +628,7 @@ function LoginScreen({ onLogin }) {
   );
 }
 
-  const KPICard = ({ title, value, subtext, icon: Icon, colorClass, onClick }) => (
+  const KPICard = ({ title, value, subtext, icon: Icon, colorClass, onClick }: any) => (
     <Card onClick={onClick} className="cursor-pointer hover:-translate-y-1 transition-transform border-t-4 border-t-[#00D4FF]">
       <div className="flex items-start justify-between">
         <div>
@@ -643,7 +643,7 @@ function LoginScreen({ onLogin }) {
     </Card>
   );
 
-const GreetingCard = ({ userName, children }) => {
+const GreetingCard = ({ userName, children }: any) => {
   const hour = new Date().getHours();
   let greeting = '';
   let emoji = '';
@@ -3666,7 +3666,7 @@ function StudentReadOnlyAssessmentModule({ db, user }) {
                 <td className="p-4 text-center font-bold text-white text-lg">{a.grade}</td>
                 <td className="p-4 text-center text-gray-400 text-xs">
                    {Object.entries(a.scores || {}).map(([sub, score]) => (
-                      <span key={sub} className="block">{sub}: {score}</span>
+                      <span key={sub} className="block">{`${sub}: ${score}`}</span>
                    ))}
                 </td>
               </tr>
