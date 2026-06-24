@@ -496,6 +496,15 @@ function LoginScreen({ onLogin, isDbLoaded = true }) {
   const [loginError, setLoginError] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [countdown, setCountdown] = useState(10); // Diubah dari 5 menjadi 10
+
+  // Effect untuk menjalankan timer saat db belum siap
+  useEffect(() => {
+    if (!isDbLoaded && countdown > 0) {
+      const timer = setInterval(() => setCountdown(c => c - 1), 1000);
+      return () => clearInterval(timer);
+    }
+  }, [isDbLoaded, countdown]);
 
   useEffect(() => {
     const saved = localStorage.getItem('ecg_remembered_user');
@@ -611,7 +620,9 @@ function LoginScreen({ onLogin, isDbLoaded = true }) {
 
              <button type="submit" disabled={isLoading || !isDbLoaded} className="w-full mt-8 bg-[#00C2FF] hover:bg-[#00A3D9] text-[#051126] font-bold py-3.5 px-4 rounded-xl transition-all duration-300 transform hover:-translate-y-0.5 hover:shadow-[0_8px_25px_rgba(0,194,255,0.25)] disabled:opacity-70 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-3 text-base">
                {!isDbLoaded ? (
-                 <><div className="w-5 h-5 border-2 border-[#051126]/20 border-t-[#051126] rounded-full animate-spin"></div>Connecting...</>
+                 <span className="flex items-center gap-2 font-mono tracking-widest font-bold">
+                   {countdown > 0 ? `SYSTEM READY IN [${countdown}]` : 'FINALIZING...'}
+                 </span>
                ) : isLoading ? (
                  <><div className="w-5 h-5 border-2 border-[#051126]/20 border-t-[#051126] rounded-full animate-spin"></div>Authenticating...</>
                ) : (
