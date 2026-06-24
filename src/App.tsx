@@ -489,7 +489,7 @@ function ForcePasswordChangeScreen({ user, db, setDb, setCurrentUser, showToast 
   );
 }
 
-function LoginScreen({ onLogin }) {
+function LoginScreen({ onLogin, isDbLoaded = true }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -609,8 +609,14 @@ function LoginScreen({ onLogin }) {
                <a href="https://wa.link/uwdlzm" target="_blank" rel="noopener noreferrer" className="text-sm text-[#00C2FF] hover:text-[#00A3D9] transition-colors font-semibold">Forgot Password?</a>
              </div>
 
-             <button type="submit" disabled={isLoading} className="w-full mt-8 bg-[#00C2FF] hover:bg-[#00A3D9] text-[#051126] font-bold py-3.5 px-4 rounded-xl transition-all duration-300 transform hover:-translate-y-0.5 hover:shadow-[0_8px_25px_rgba(0,194,255,0.25)] disabled:opacity-70 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-3 text-base">
-               {isLoading ? <><div className="w-5 h-5 border-2 border-[#051126]/20 border-t-[#051126] rounded-full animate-spin"></div>Authenticating...</> : 'Sign In'}
+             <button type="submit" disabled={isLoading || !isDbLoaded} className="w-full mt-8 bg-[#00C2FF] hover:bg-[#00A3D9] text-[#051126] font-bold py-3.5 px-4 rounded-xl transition-all duration-300 transform hover:-translate-y-0.5 hover:shadow-[0_8px_25px_rgba(0,194,255,0.25)] disabled:opacity-70 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-3 text-base">
+               {!isDbLoaded ? (
+                 <><div className="w-5 h-5 border-2 border-[#051126]/20 border-t-[#051126] rounded-full animate-spin"></div>Connecting...</>
+               ) : isLoading ? (
+                 <><div className="w-5 h-5 border-2 border-[#051126]/20 border-t-[#051126] rounded-full animate-spin"></div>Authenticating...</>
+               ) : (
+                 'Sign In'
+               )}
              </button>
            </form>
         </div>
@@ -1287,6 +1293,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [logoutConfirm, setLogoutConfirm] = useState(false);
+  const [isDbLoaded, setIsDbLoaded] = useState(false);
   
   // State untuk Cloud Connection
   const [isCloudConnected, setIsCloudConnected] = useState(true);
@@ -1307,6 +1314,7 @@ export default function App() {
             setDb(data);
             localStorage.setItem('ecg_db', JSON.stringify(data));
             setIsCloudConnected(true);
+            setIsDbLoaded(true);
             return;
           }
         }
@@ -1328,6 +1336,7 @@ export default function App() {
       } else {
         setDb(generateDummyDatabase());
       }
+      setIsDbLoaded(true);
     };
     loadData();
   }, []);
@@ -1402,27 +1411,49 @@ export default function App() {
   };
 
   const generateId = (prefix, collection) => {
-    const count = (db[collection] || []).length + 1;
-    return `${prefix}-${new Date().getFullYear()}-${count.toString().padStart(3, '0')}`;
+    const currentYear = new Date().getFullYear();
+    let maxCount = 0;
+
+    const checkId = (idStr) => {
+      if (idStr && idStr.startsWith(`${prefix}-${currentYear}-`)) {
+        const num = parseInt(idStr.split('-')[2], 10);
+        if (!isNaN(num) && num > maxCount) maxCount = num;
+      }
+    };
+
+    // Cari angka terbesar dari koleksi yang aktif
+    (db[collection] || []).forEach((item) => checkId(item.id));
+    
+    // Cari angka terbesar dari recycle bin agar tidak memakai ulang ID yang sudah dihapus
+    (db.recycleBin || []).forEach((binItem) => {
+      if (binItem.originalCollection === collection && binItem.data) {
+         checkId(binItem.data.id);
+      }
+    });
+
+    return `${prefix}-${currentYear}-${(maxCount + 1).toString().padStart(3, '0')}`;
   };
 
   // LOGIN HANDLER: sekarang bisa login sebagai admin, tutor, maupun siswa (Student)
   const handleLogin = (username, password, rememberMe) => {
+    const cleanUser = username.trim();
+    const cleanPass = password.trim();
+
     const appUser = db.users.find(
-      (u) => u.username === username && u.password === password && u.active === 'Active'
+      (u) => u.username === cleanUser && u.password === cleanPass && u.active === 'Active'
     );
     const tutor = db.tutors.find(
-      (u) => u.username === username && u.password === password && u.status === 'Active'
+      (u) => u.username === cleanUser && u.password === cleanPass && u.status === 'Active'
     );
 
     if (appUser) {
-      if (rememberMe) localStorage.setItem('ecg_remembered_user', JSON.stringify({ username, password }));
+      if (rememberMe) localStorage.setItem('ecg_remembered_user', JSON.stringify({ username: cleanUser, password: cleanPass }));
       else localStorage.removeItem('ecg_remembered_user');
       setCurrentUser(appUser);
       showToast(`Welcome back, ${appUser.name}`);
       return true;
     } else if (tutor) {
-      if (rememberMe) localStorage.setItem('ecg_remembered_user', JSON.stringify({ username, password }));
+      if (rememberMe) localStorage.setItem('ecg_remembered_user', JSON.stringify({ username: cleanUser, password: cleanPass }));
       else localStorage.removeItem('ecg_remembered_user');
       setCurrentUser({ ...tutor, role: 'tutor' });
       showToast(`Welcome back, ${tutor.name}`);
@@ -1506,7 +1537,7 @@ export default function App() {
     }
   };
 
-  if (!currentUser) return <LoginScreen onLogin={handleLogin} />;
+  if (!currentUser) return <LoginScreen onLogin={handleLogin} isDbLoaded={isDbLoaded} />;
 
   // FORCE PASSWORD CHANGE JIKA DIMINTA
   if (currentUser.mustChangePassword) {
