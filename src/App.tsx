@@ -496,15 +496,6 @@ function LoginScreen({ onLogin, isDbLoaded = true }) {
   const [loginError, setLoginError] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [countdown, setCountdown] = useState(10); // Diubah dari 5 menjadi 10
-
-  // Effect untuk menjalankan timer saat db belum siap
-  useEffect(() => {
-    if (!isDbLoaded && countdown > 0) {
-      const timer = setInterval(() => setCountdown(c => c - 1), 1000);
-      return () => clearInterval(timer);
-    }
-  }, [isDbLoaded, countdown]);
 
   useEffect(() => {
     const saved = localStorage.getItem('ecg_remembered_user');
@@ -621,7 +612,7 @@ function LoginScreen({ onLogin, isDbLoaded = true }) {
              <button type="submit" disabled={isLoading || !isDbLoaded} className="w-full mt-8 bg-[#00C2FF] hover:bg-[#00A3D9] text-[#051126] font-bold py-3.5 px-4 rounded-xl transition-all duration-300 transform hover:-translate-y-0.5 hover:shadow-[0_8px_25px_rgba(0,194,255,0.25)] disabled:opacity-70 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-3 text-base">
                {!isDbLoaded ? (
                  <span className="flex items-center gap-2 font-mono tracking-widest font-bold">
-                   {countdown > 0 ? `SYSTEM READY IN [${countdown}]` : 'FINALIZING...'}
+                   FINALIZING...
                  </span>
                ) : isLoading ? (
                  <><div className="w-5 h-5 border-2 border-[#051126]/20 border-t-[#051126] rounded-full animate-spin"></div>Authenticating...</>
@@ -1317,23 +1308,7 @@ export default function App() {
 
   useEffect(() => {
     const loadData = async () => {
-      try {
-        if (GOOGLE_APPS_SCRIPT_URL) {
-          const response = await fetch(GOOGLE_APPS_SCRIPT_URL);
-          const data = await response.json();
-          if (data && data.students) {
-            setDb(data);
-            localStorage.setItem('ecg_db', JSON.stringify(data));
-            setIsCloudConnected(true);
-            setIsDbLoaded(true);
-            return;
-          }
-        }
-      } catch (e) {
-        console.warn('Koneksi cloud gagal, menggunakan Local Storage', e);
-        setIsCloudConnected(false);
-      }
-
+      // 1. MUAT DATA LOKAL LEBIH DULU AGAR INSTAN
       const saved = localStorage.getItem('ecg_db');
       if (saved) {
         try {
@@ -1347,7 +1322,25 @@ export default function App() {
       } else {
         setDb(generateDummyDatabase());
       }
+      
+      // 2. LANGSUNG AKTIFKAN APLIKASI & TOMBOL LOGIN (Tanpa Menunggu Cloud)
       setIsDbLoaded(true);
+
+      // 3. AMBIL DATA CLOUD DI LATAR BELAKANG SECARA DIAM-DIAM
+      try {
+        if (GOOGLE_APPS_SCRIPT_URL) {
+          const response = await fetch(GOOGLE_APPS_SCRIPT_URL);
+          const data = await response.json();
+          if (data && data.students) {
+            setDb(data);
+            localStorage.setItem('ecg_db', JSON.stringify(data));
+            setIsCloudConnected(true);
+          }
+        }
+      } catch (e) {
+        console.warn('Koneksi cloud gagal, menggunakan Local Storage', e);
+        setIsCloudConnected(false);
+      }
     };
     loadData();
   }, []);
