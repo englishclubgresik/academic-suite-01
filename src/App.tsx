@@ -440,14 +440,14 @@ const generateDummyDatabase = () => {
   }
   for (let i = 0; i < 20; i++) {
     const eventDate = new Date(today.getTime() + (i - 5) * 86400000).toISOString().split('T')[0];
+    const assignedTutor = db.tutors[i % db.tutors.length];
     db.calendar.push({
       id: `CAL-${i}`,
-      name: `Class Activity ${i}`,
+      sessionGroup: assignedTutor.teachingSession,
       date: eventDate,
       startTime: '15:00',
       endTime: '16:30',
-      notes: 'Regular Session',
-      tutor: db.tutors[i % db.tutors.length].name,
+      tutor: assignedTutor.name,
     });
   }
 
@@ -955,7 +955,7 @@ const StudentDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: a
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6">
                  <div>
                     <p className="text-xs text-blue-200/60 uppercase tracking-widest font-bold mb-1.5 flex items-center gap-1.5"><Clock size={12}/> Next Class</p>
-                    <p className="text-white font-semibold text-sm line-clamp-1">{nextClass ? `${nextClass.name} @ ${nextClass.startTime}` : 'None today'}</p>
+                    <p className="text-white font-semibold text-sm line-clamp-1">{nextClass ? `${nextClass.sessionGroup || nextClass.name} @ ${nextClass.startTime}` : 'None today'}</p>
                  </div>
                  <div>
                     <p className="text-xs text-blue-200/60 uppercase tracking-widest font-bold mb-1.5 flex items-center gap-1.5"><CheckSquare size={12}/> Assignments</p>
@@ -997,7 +997,7 @@ const StudentDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: a
                     <div className="p-3 bg-emerald-500/10 rounded-xl"><CalendarIcon size={24} className="text-emerald-400"/></div>
                     <span className="px-3 py-1 text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full uppercase tracking-widest">Up Next</span>
                  </div>
-                 <h4 className="font-bold text-white text-lg mb-1.5">{nextClass ? nextClass.name : 'No classes today'}</h4>
+                 <h4 className="font-bold text-white text-lg mb-1.5">{nextClass ? (nextClass.sessionGroup || nextClass.name) : 'No classes today'}</h4>
                  <p className="text-sm text-gray-400 mb-6">{nextClass ? `${nextClass.startTime} - ${nextClass.endTime} • ${nextClass.tutor}` : 'Take a break and review your notes.'}</p>
                  <Button variant="secondary" className="w-full text-sm font-semibold py-2.5 bg-emerald-500/10 border-none text-emerald-400 hover:bg-emerald-500/20 rounded-lg" disabled={!nextClass} onClick={() => setActiveTab('calendar')}>View Schedule</Button>
               </Card>
@@ -1038,7 +1038,7 @@ const StudentDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: a
                         <span className="px-3 py-1.5 text-xs font-bold bg-[#0B0F19] text-emerald-400 border border-emerald-500/20 rounded-lg tracking-wide">{new Date(c.date).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'})}</span>
                         <span className="text-xs font-semibold text-gray-400 bg-gray-800/50 px-2.5 py-1.5 rounded-lg flex items-center gap-1.5"><Clock size={12}/> {c.startTime}</span>
                     </div>
-                    <h4 className="font-bold text-white text-lg mb-2 truncate">{c.name}</h4>
+                    <h4 className="font-bold text-white text-lg mb-2 truncate">{c.sessionGroup || c.name}</h4>
                     <div className="flex items-center gap-2 text-sm text-gray-400">
                         <User size={16} className="text-purple-400" />
                         <span className="truncate">{c.tutor}</span>
@@ -1123,12 +1123,16 @@ const AdminDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
   const totalRevenueAmount = currentMonthPayments.filter(p => p.status === 'Paid').reduce((sum, p) => sum + Number(p.amount), 0);
   const paidInvoicesCount = currentMonthPayments.filter(p => p.status === 'Paid').length;
 
-  // NEW: Calculate meetings this month for Expected Revenue from Calendar
+  // NEW: Calculate meetings this month for Expected Revenue from Calendar PER SESSION
   const currentMonthPrefix = `${currentYear}-${currentMonth.padStart(2, '0')}`;
-  const meetingsThisMonth = db.calendar.filter(c => c.date.startsWith(currentMonthPrefix)).length;
   
-  // Outstanding Revenue = Expected Revenue (Students * Meetings * Rp 25.000) - Collected
-  const expectedRevenueAmount = totalStudents * meetingsThisMonth * 25000;
+  let expectedRevenueAmount = 0;
+  SESSIONS.forEach(session => {
+      const studentsInSession = db.students.filter(s => (s.status === 'Active' || s.active === 'Active') && getSessionGroup(s.class) === session).length;
+      const meetingsForSession = db.calendar.filter(c => c.date.startsWith(currentMonthPrefix) && (c.sessionGroup === session || c.name === session)).length;
+      expectedRevenueAmount += (studentsInSession * meetingsForSession * 25000);
+  });
+  
   const totalOutstandingRevenueAmount = Math.max(0, expectedRevenueAmount - totalRevenueAmount);
 
   const sessionRevenueData = SESSIONS.map(session => {
@@ -1255,7 +1259,7 @@ const AdminDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
                {upcomingCalendar.map(c => (
                   <div key={c.id} className="flex justify-between items-center p-3 sm:p-4 bg-[#0B0F19] rounded-xl border border-gray-800 border-l-4 border-l-emerald-500 hover:bg-[#0A0E17] transition-colors gap-3">
                      <div className="flex-1 min-w-0">
-                        <p className="font-bold text-white text-sm sm:text-base truncate">{c.name}</p>
+                        <p className="font-bold text-white text-sm sm:text-base truncate">{c.sessionGroup || c.name}</p>
                         <div className="flex items-center gap-2 mt-1 sm:mt-1.5 text-[10px] sm:text-xs">
                            <span className="text-emerald-400 font-medium whitespace-nowrap">{c.date}</span>
                            <span className="text-gray-500 hidden sm:inline whitespace-nowrap">{c.startTime} - {c.endTime}</span>
@@ -1343,7 +1347,7 @@ const TutorDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
                {myClassesToday.map(c => (
                   <div key={c.id} className="flex justify-between items-center p-3 sm:p-4 bg-[#0B0F19] rounded-xl border border-gray-800 border-l-4 border-l-[#00D4FF] hover:bg-[#0A0E17] transition-colors gap-3">
                      <div className="flex-1 min-w-0">
-                        <p className="font-bold text-white text-sm sm:text-base truncate">{c.name}</p>
+                        <p className="font-bold text-white text-sm sm:text-base truncate">{c.sessionGroup || c.name}</p>
                         <div className="flex items-center gap-2 mt-1 sm:mt-1.5 text-[10px] sm:text-xs">
                            <span className="text-[#00D4FF] font-medium whitespace-nowrap"><Clock size={12} className="inline mr-1" />{c.startTime} - {c.endTime}</span>
                         </div>
@@ -2987,8 +2991,16 @@ function AnnouncementsModule({ db, setDb, generateId, user, showToast, softDelet
 }
 
 function CalendarModule({ db, setDb, generateId, showToast, user, softDelete }) {
-  const [formData, setFormData] = useState({ name: '', date: '', startTime: '', endTime: '', tutor: '', notes: '' });
+  const [formData, setFormData] = useState({ sessionGroup: SESSIONS[0], date: '', startTime: '', endTime: '', tutor: '' });
   const [isEditingId, setIsEditingId] = useState(null);
+
+  // Auto-fill tutor based on selected session
+  useEffect(() => {
+    if (formData.sessionGroup) {
+      const assignedTutor = db.tutors.find(t => t.teachingSession === formData.sessionGroup && t.status === 'Active');
+      setFormData(prev => ({ ...prev, tutor: assignedTutor ? assignedTutor.name : 'No Tutor Assigned' }));
+    }
+  }, [formData.sessionGroup, db.tutors]);
 
   const handleSave = (e) => {
     e.preventDefault();
@@ -2999,7 +3011,7 @@ function CalendarModule({ db, setDb, generateId, showToast, user, softDelete }) 
       setDb((p) => ({ ...p, calendar: [ ...p.calendar, { id: generateId('CAL', 'calendar'), ...formData } ] }));
       showToast('Event Saved');
     }
-    setFormData({ name: '', date: '', startTime: '', endTime: '', tutor: '', notes: '' });
+    setFormData({ sessionGroup: SESSIONS[0], date: '', startTime: '', endTime: '', tutor: '' });
   };
 
   return (
@@ -3008,14 +3020,15 @@ function CalendarModule({ db, setDb, generateId, showToast, user, softDelete }) 
         <Card>
           <h3 className="text-lg font-bold text-white mb-4">{isEditingId ? 'Edit Event' : 'Add Calendar Event'}</h3>
           <form onSubmit={handleSave} className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="col-span-2 md:col-span-4"><Input label="Activity Name" value={formData.name} onChange={(v) => setFormData({ ...formData, name: v })} required /></div>
+            <Input label="Session" type="select" options={SESSIONS} value={formData.sessionGroup} onChange={(v) => setFormData({ ...formData, sessionGroup: v })} required />
             <Input label="Date" type="date" value={formData.date} onChange={(v) => setFormData({ ...formData, date: v })} required />
             <Input label="Start" type="time" value={formData.startTime} onChange={(v) => setFormData({ ...formData, startTime: v })} required />
             <Input label="End" type="time" value={formData.endTime} onChange={(v) => setFormData({ ...formData, endTime: v })} required />
-            <Input label="Assigned Tutor" type="select" options={db.tutors.map((t) => t.name)} value={formData.tutor} onChange={(v) => setFormData({ ...formData, tutor: v })} required />
-            <div className="col-span-2 md:col-span-4"><Input label="Notes" value={formData.notes} onChange={(v) => setFormData({ ...formData, notes: v })} /></div>
+            <div className="col-span-2 md:col-span-4">
+               <Input label="Assigned Tutor (Auto-filled)" value={formData.tutor} onChange={() => {}} disabled />
+            </div>
             <div className="col-span-2 md:col-span-4 flex justify-center gap-2">
-              {isEditingId && <Button variant="ghost" onClick={() => { setIsEditingId(null); setFormData({ name: '', date: '', startTime: '', endTime: '', tutor: '', notes: '' }); }}>Cancel</Button>}
+              {isEditingId && <Button variant="ghost" onClick={() => { setIsEditingId(null); setFormData({ sessionGroup: SESSIONS[0], date: '', startTime: '', endTime: '', tutor: '' }); }}>Cancel</Button>}
               <Button type="submit">Save Activity</Button>
             </div>
           </form>
@@ -3024,20 +3037,19 @@ function CalendarModule({ db, setDb, generateId, showToast, user, softDelete }) 
       <Card className="p-0 overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead className="bg-[#0A0E17] border-b border-gray-800">
-            <tr><th className="p-4 text-center">Date</th><th className="p-4 text-center">Time</th><th className="p-4 text-center">Event</th><th className="p-4 text-center">Tutor</th><th className="p-4 text-center">Notes</th>{user.role === 'admin' && <th className="p-4 text-center">Actions</th>}</tr>
+            <tr><th className="p-4 text-center">Date</th><th className="p-4 text-center">Time</th><th className="p-4 text-center">Session</th><th className="p-4 text-center">Tutor</th>{user.role === 'admin' && <th className="p-4 text-center">Actions</th>}</tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
             {db.calendar.slice().reverse().map((c) => (
                 <tr key={c.id} className="hover:bg-[#0B0F19]">
                   <td className="p-4 text-center whitespace-nowrap">{c.date}</td>
                   <td className="p-4 text-center whitespace-nowrap">{c.startTime} - {c.endTime}</td>
-                  <td className="p-4 text-center text-white font-medium">{c.name}</td>
+                  <td className="p-4 text-center text-white font-medium">{c.sessionGroup || c.name}</td>
                   <td className="p-4 text-center text-[#00D4FF]">{c.tutor}</td>
-                  <td className="p-4 text-center text-gray-500 max-w-[200px] truncate">{c.notes}</td>
                   {user.role === 'admin' && (
                     <td className="p-4 text-center flex justify-center gap-2">
-                      <button onClick={() => { setFormData(c); setIsEditingId(c.id); const contentEl = document.querySelector('main'); setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50); }} className="text-blue-400 p-1"><Edit2 size={16} /></button>
-                      <button onClick={() => softDelete('calendar', c.id, c.name)} className="text-red-400 p-1"><Trash2 size={16} /></button>
+                      <button onClick={() => { setFormData({ sessionGroup: c.sessionGroup || c.name, date: c.date, startTime: c.startTime, endTime: c.endTime, tutor: c.tutor }); setIsEditingId(c.id); const contentEl = document.querySelector('main'); setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50); }} className="text-blue-400 p-1"><Edit2 size={16} /></button>
+                      <button onClick={() => softDelete('calendar', c.id, c.sessionGroup || c.name)} className="text-red-400 p-1"><Trash2 size={16} /></button>
                     </td>
                   )}
                 </tr>
