@@ -1118,7 +1118,8 @@ const AdminDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
   const currentJournals = db.journals.filter(j => j.date.startsWith(`${currentYear}-${currentMonth.padStart(2, '0')}`)).length;
   const paidPayrollCount = db.payroll.filter(p => p.month === currentMonth && p.year === currentYear && p.status === 'Paid').length;
 
-  const currentMonthPayments = db.payments.filter(p => p.month === currentMonth && p.year === currentYear);
+  const activeStudentIds = db.students.filter(s => s.status === 'Active' || s.active === 'Active').map(s => s.id);
+  const currentMonthPayments = db.payments.filter(p => p.month === currentMonth && p.year === currentYear && activeStudentIds.includes(p.studentId));
   const totalRevenueAmount = currentMonthPayments.filter(p => p.status === 'Paid').reduce((sum, p) => sum + Number(p.amount), 0);
   const paidInvoicesCount = currentMonthPayments.filter(p => p.status === 'Paid').length;
 
@@ -2476,10 +2477,11 @@ function PaymentsModule({ db, setDb, generateId, showToast, handlePrint, handleS
   }, [activeStudents, sessionGroup]);
 
   const totalRevenue = useMemo(() => {
+    const validStudentIds = new Set(targetStudents.map(s => s.id));
     return db.payments
-      .filter(p => p.month === String(month) && p.year === String(year) && (sessionGroup === 'All Sessions' || p.sessionGroup === sessionGroup) && p.status === 'Paid')
+      .filter(p => p.month === String(month) && p.year === String(year) && p.status === 'Paid' && validStudentIds.has(p.studentId))
       .reduce((sum, p) => sum + Number(p.amount), 0);
-  }, [db.payments, month, year, sessionGroup]);
+  }, [db.payments, month, year, targetStudents]);
 
   const handleRecordInline = (student) => {
     const amt = amounts[student.id];
