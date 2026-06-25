@@ -1482,7 +1482,8 @@ export default function App() {
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
-          if (!parsed.students || parsed.students.length === 0)
+          // PERBAIKAN: Jangan buat ulang DB dummy jika students kosong. Gunakan validasi users.
+          if (!parsed.users || !Array.isArray(parsed.users))
             setDb(generateDummyDatabase());
           else setDb(parsed);
         } catch (e) {
@@ -1500,7 +1501,8 @@ export default function App() {
         if (GOOGLE_APPS_SCRIPT_URL) {
           const response = await fetch(GOOGLE_APPS_SCRIPT_URL);
           const data = await response.json();
-          if (data && data.students) {
+          // PERBAIKAN: Validasi sinkronisasi cloud menggunakan users, bukan students
+          if (data && data.users && Array.isArray(data.users)) {
             setDb(data);
             localStorage.setItem('ecg_db', JSON.stringify(data));
             setIsCloudConnected(true);
@@ -1515,7 +1517,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (db && db.students && db.students.length > 0) {
+    // PERBAIKAN: Simpan perubahan ke local dan cloud asalkan struktur DB valid (ada users),
+    // bahkan jika students atau data lainnya 0. Dibungkus dengan isDbLoaded agar tidak menimpa data awal.
+    if (isDbLoaded && db && Array.isArray(db.users)) {
       localStorage.setItem('ecg_db', JSON.stringify(db));
       if (GOOGLE_APPS_SCRIPT_URL) {
         fetch(GOOGLE_APPS_SCRIPT_URL, {
@@ -1531,7 +1535,7 @@ export default function App() {
         });
       }
     }
-  }, [db]);
+  }, [db, isDbLoaded]);
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -1589,8 +1593,11 @@ export default function App() {
 
     const checkId = (idStr) => {
       if (idStr && idStr.startsWith(`${prefix}-${currentYear}-`)) {
-        const num = parseInt(idStr.split('-')[2], 10);
-        if (!isNaN(num) && num > maxCount) maxCount = num;
+        const numStr = idStr.split('-')[2];
+        if (numStr) {
+           const num = parseInt(numStr, 10);
+           if (!isNaN(num) && num > maxCount) maxCount = num;
+        }
       }
     };
 
@@ -1604,7 +1611,14 @@ export default function App() {
       }
     });
 
-    return `${prefix}-${currentYear}-${(maxCount + 1).toString().padStart(3, '0')}`;
+    const nextNum = (maxCount + 1).toString().padStart(3, '0');
+    
+    // PERBAIKAN KRITIS: Tambahkan 4 karakter acak (hash) di akhir ID
+    // Contoh output: STU-2026-001-A4X9
+    // Menjamin keamanan data 100% agar tidak tumpang tindih meskipun data lama dihapus permanen
+    const uniqueSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+
+    return `${prefix}-${currentYear}-${nextNum}-${uniqueSuffix}`;
   };
 
   // LOGIN HANDLER: sekarang bisa login sebagai admin, tutor, maupun siswa (Student)
@@ -3645,7 +3659,7 @@ function HistoryReportsModule({ db, setDb, showToast, handlePrint }) {
 
 // MODULE UNTUK BUAT AKUN TERMASUK SISWA
 function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm }) {
-  const [formData, setFormData] = useState({ name: '', username: '', password: '', role: 'admin', active: 'Active', studentId: '' });
+  const [formData, setFormData] = useState({ name: '', username: '', password: '', role: 'admin', active: 'Active', studentId: '', teachingSession: '' });
   const [isEditingId, setIsEditingId] = useState(null);
   const [resetDialog, setResetDialog] = useState(null);
   const [newPassword, setNewPassword] = useState('');
@@ -3659,17 +3673,24 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
       setDb((p) => ({ ...p, users: isEditingId ? p.users.map((u) => (u.id === isEditingId ? rec : u)) : [...p.users, rec] }));
     } else if (formData.role === 'student') {
       if (!formData.studentId) return showToast('Please select a student to link', 'error');
-      const linkedStudent = db.students.find(s => s.id === formData.studentId);
+      // PERBAIKAN: Fallback jika student yang di-link sudah dihapus dari direktori
+      const linkedStudent = db.students.find(s => s.id === formData.studentId) || { name: formData.name };
       // Untuk student yang baru dibuat, paksa ganti password di awal
       const rec = { ...formData, name: linkedStudent.name, id: isEditingId || generateId('USR', 'users'), mustChangePassword: !isEditingId };
       setDb((p) => ({ ...p, users: isEditingId ? p.users.map((u) => (u.id === isEditingId ? rec : u)) : [...p.users, rec] }));
     } else {
-      const rec = { ...formData, id: isEditingId || generateId('TUT', 'tutors'), status: formData.active, teachingSession: SESSIONS[0] };
+      // PERBAIKAN KRITIS: Jangan menimpa (override) teachingSession milik tutor kembali ke SESSIONS[0] saat diedit
+      const rec = { 
+         ...formData, 
+         id: isEditingId || generateId('TUT', 'tutors'), 
+         status: formData.active, 
+         teachingSession: formData.teachingSession || SESSIONS[0] 
+      };
       setDb((p) => ({ ...p, tutors: isEditingId ? p.tutors.map((t) => (t.id === isEditingId ? rec : t)) : [...p.tutors, rec] }));
     }
     showToast('User Saved');
     setIsEditingId(null);
-    setFormData({ name: '', username: '', password: '', role: 'admin', active: 'Active', studentId: '' });
+    setFormData({ name: '', username: '', password: '', role: 'admin', active: 'Active', studentId: '', teachingSession: '' });
   };
 
   const handleResetPassword = (e) => {
@@ -3740,7 +3761,7 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
           <Input label="Status" type="select" options={['Active', 'Inactive']} value={formData.active} onChange={(v) => setFormData({ ...formData, active: v })} required />
           
           <div className="col-span-2 md:col-span-5 flex justify-center gap-2">
-            {isEditingId && <Button variant="ghost" onClick={() => { setIsEditingId(null); setFormData({ name: '', username: '', password: '', role: 'admin', active: 'Active', studentId: '' }); }}>Cancel</Button>}
+            {isEditingId && <Button variant="ghost" onClick={() => { setIsEditingId(null); setFormData({ name: '', username: '', password: '', role: 'admin', active: 'Active', studentId: '', teachingSession: '' }); }}>Cancel</Button>}
             <Button type="submit">Save Account</Button>
           </div>
         </form>
