@@ -116,6 +116,16 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
+const calculateDaysLeft = (targetDate, todayDate) => {
+  const t = new Date(targetDate).getTime();
+  const d = new Date(todayDate).getTime();
+  const diff = Math.ceil((t - d) / (1000 * 3600 * 24));
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Tomorrow';
+  if (diff < 0) return 'Passed';
+  return `${diff} Days Left`;
+};
+
 const getPerformanceCat = (score) => {
   if (score >= 90) return { label: 'Excellent', color: 'text-green-600', bg: 'bg-green-100' };
   if (score >= 80) return { label: 'Very Good', color: 'text-blue-600', bg: 'bg-blue-100' };
@@ -1035,7 +1045,10 @@ const StudentDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: a
               {upcomingClasses.length > 0 ? upcomingClasses.map(c => (
                  <Card key={c.id} className="min-w-[280px] sm:min-w-[320px] bg-[#151B26] p-5 border border-gray-800 shadow-md hover:border-emerald-500/40 hover:shadow-[0_8px_30px_rgba(16,185,129,0.1)] transition-all snap-start">
                     <div className="flex justify-between items-start mb-4">
-                        <span className="px-3 py-1.5 text-xs font-bold bg-[#0B0F19] text-emerald-400 border border-emerald-500/20 rounded-lg tracking-wide">{new Date(c.date).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'})}</span>
+                        <div className="flex flex-col gap-1.5">
+                           <span className="px-3 py-1.5 text-xs font-bold bg-[#0B0F19] text-emerald-400 border border-emerald-500/20 rounded-lg tracking-wide">{new Date(c.date).toLocaleDateString('en-US', {weekday: 'short', month:'short', day:'numeric'})}</span>
+                           <span className="text-[10px] font-bold text-amber-400 uppercase tracking-widest">{calculateDaysLeft(c.date, today)}</span>
+                        </div>
                         <span className="text-xs font-semibold text-gray-400 bg-gray-800/50 px-2.5 py-1.5 rounded-lg flex items-center gap-1.5"><Clock size={12}/> {c.startTime}</span>
                     </div>
                     <h4 className="font-bold text-white text-lg mb-2 truncate">{c.sessionGroup || c.name}</h4>
@@ -1260,13 +1273,12 @@ const AdminDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
                   <div key={c.id} className="flex justify-between items-center p-3 sm:p-4 bg-[#0B0F19] rounded-xl border border-gray-800 border-l-4 border-l-emerald-500 hover:bg-[#0A0E17] transition-colors gap-3">
                      <div className="flex-1 min-w-0">
                         <p className="font-bold text-white text-sm sm:text-base truncate">{c.sessionGroup || c.name}</p>
-                        <div className="flex items-center gap-2 mt-1 sm:mt-1.5 text-[10px] sm:text-xs">
-                           <span className="text-emerald-400 font-medium whitespace-nowrap">{c.date}</span>
+                        <p className="text-xs text-blue-400 font-medium truncate mt-0.5">{c.tutor}</p>
+                        <div className="flex items-center flex-wrap gap-2 mt-1.5 text-[10px] sm:text-xs">
+                           <span className="text-emerald-400 font-medium whitespace-nowrap">{new Date(c.date).toLocaleDateString('en-US', {weekday: 'short'})}, {c.date}</span>
                            <span className="text-gray-500 hidden sm:inline whitespace-nowrap">{c.startTime} - {c.endTime}</span>
+                           <span className="text-amber-400 font-bold bg-amber-400/10 px-2 py-0.5 rounded ml-auto">{calculateDaysLeft(c.date, today)}</span>
                         </div>
-                     </div>
-                     <div className="flex-shrink-0">
-                        <Badge status="Active" />
                      </div>
                   </div>
                ))}
@@ -1294,6 +1306,11 @@ const TutorDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
   const myClassesToday = db.calendar.filter(c => c.date === today && isMyClass(c.tutor, user.name));
   const todayClassesCount = myClassesToday.length;
 
+  const myUpcomingClasses = db.calendar
+      .filter(c => c.date >= today && isMyClass(c.tutor, user.name))
+      .sort((a,b) => a.date.localeCompare(b.date))
+      .slice(0, 5);
+
   const hasCheckedIn = db.tutorAttendance.some(a => a.tutorId === user.id && a.date === today && a.status === 'Present');
   const checkInText = hasCheckedIn ? 'Present' : 'Not Checked In';
 
@@ -1312,7 +1329,8 @@ const TutorDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
   // REPLACE THIS SECTION: Mengubah pengali durasi kelas menjadi 1 jam
   const teachingHours = classesCompletedMonth * 1;
 
-  const classProgressData = SESSIONS.map(session => {
+  // PERBAIKAN: Hanya tampilkan progress bar untuk kelas yang diajarkan oleh tutor ini saja
+  const classProgressData = [mySession].map(session => {
      const studentsInSess = db.students.filter(s => s.status === 'Active' && getSessionGroup(s.class) === session).length;
      const assessed = db.assessments.filter(a => a.sessionGroup === session && a.month === currentMonth && a.year === currentYear).length;
      const pct = studentsInSess > 0 ? Math.round((assessed / studentsInSess) * 100) : 0;
@@ -1343,24 +1361,26 @@ const TutorDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 w-full">
          <Card className="border-t-4 border-t-[#00D4FF] shadow-lg p-0 overflow-hidden flex flex-col">
             <div className="flex justify-between items-center p-4 sm:p-5 border-b border-gray-800 bg-[#151B26]">
-               <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2"><CalendarIcon size={18} className="text-[#00D4FF]"/> Today's Schedule</h3>
+               <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2"><CalendarIcon size={18} className="text-[#00D4FF]"/> Next Schedule</h3>
                <Button variant="ghost" className="text-xs py-2 px-3 min-h-[36px]" onClick={() => setActiveTab('calendar')}>Full Calendar</Button>
             </div>
             <div className="p-4 sm:p-5 space-y-3 bg-[#151B26] flex-1">
-               {myClassesToday.map(c => (
+               {myUpcomingClasses.map(c => (
                   <div key={c.id} className="flex justify-between items-center p-3 sm:p-4 bg-[#0B0F19] rounded-xl border border-gray-800 border-l-4 border-l-[#00D4FF] hover:bg-[#0A0E17] transition-colors gap-3">
                      <div className="flex-1 min-w-0">
                         <p className="font-bold text-white text-sm sm:text-base truncate">{c.sessionGroup || c.name}</p>
-                        <div className="flex items-center gap-2 mt-1 sm:mt-1.5 text-[10px] sm:text-xs">
-                           <span className="text-[#00D4FF] font-medium whitespace-nowrap"><Clock size={12} className="inline mr-1" />{c.startTime} - {c.endTime}</span>
+                        <div className="flex items-center flex-wrap gap-2 mt-1 sm:mt-1.5 text-[10px] sm:text-xs">
+                           <span className="text-[#00D4FF] font-medium whitespace-nowrap">
+                             <CalendarIcon size={12} className="inline mr-1" />
+                             {new Date(c.date).toLocaleDateString('en-US', {weekday: 'short'})}, {c.date}
+                           </span>
+                           <span className="text-gray-400 font-medium whitespace-nowrap"><Clock size={12} className="inline mr-1" />{c.startTime} - {c.endTime}</span>
+                           <span className="text-amber-400 font-bold bg-amber-400/10 px-2 py-0.5 rounded ml-auto">{calculateDaysLeft(c.date, today)}</span>
                         </div>
-                     </div>
-                     <div className="flex-shrink-0">
-                        <Badge status="Active" />
                      </div>
                   </div>
                ))}
-               {myClassesToday.length === 0 && <p className="text-xs sm:text-sm text-gray-500 text-center py-4">No classes scheduled for today.</p>}
+               {myUpcomingClasses.length === 0 && <p className="text-xs sm:text-sm text-gray-500 text-center py-4">No upcoming classes scheduled.</p>}
             </div>
          </Card>
 
