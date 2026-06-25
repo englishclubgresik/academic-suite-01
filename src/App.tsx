@@ -45,7 +45,13 @@ import {
   QrCode,
   Quote,
   Cloud,
-  CloudOff
+  CloudOff,
+  Sun,
+  CloudRain,
+  CloudLightning,
+  Droplets,
+  Wind,
+  Thermometer
 } from 'lucide-react';
 
 declare global {
@@ -653,6 +659,139 @@ function LoginScreen({ onLogin, isDbLoaded = true }) {
     </Card>
   );
 
+// REPLACE THIS SECTION: DateTime Display Component
+// Alasan: Mengurangi margin atas (mt-3) agar lebih merapat dengan teks sapaan dan ukuran tombol lebih ringkas di layar kecil.
+const DateTimeDisplay = () => {
+  const [now, setNow] = useState(new Date());
+
+  useEffect(() => {
+    // Sinkronisasi pembaruan agar tepat setiap awal menit
+    const secUntilNextMin = 60 - now.getSeconds();
+    const timeout = setTimeout(() => {
+      setNow(new Date());
+      const interval = setInterval(() => setNow(new Date()), 60000);
+      return () => clearInterval(interval);
+    }, secUntilNextMin * 1000);
+    return () => clearTimeout(timeout);
+  }, [now]);
+
+  const dateOptions: Intl.DateTimeFormatOptions = { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' };
+  const timeOptions: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit', hour12: true };
+
+  return (
+    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2.5 mt-3 text-gray-300 font-medium w-full">
+      <div className="flex items-center gap-2 bg-[#0A0E17]/80 backdrop-blur-md px-3.5 py-2 rounded-xl border border-gray-700/50 text-xs sm:text-sm shadow-md hover:border-gray-600 transition-all w-full sm:w-auto">
+        <CalendarIcon size={14} className="text-[#3B82F6]" />
+        <span className="tracking-wide">{now.toLocaleDateString('en-US', dateOptions)}</span>
+      </div>
+      <div className="flex items-center gap-2 bg-[#00D4FF]/10 backdrop-blur-md text-[#00D4FF] px-3.5 py-2 rounded-xl border border-[#00D4FF]/20 text-xs sm:text-sm shadow-[0_4px_12px_rgba(0,212,255,0.05)] font-bold tracking-wider hover:bg-[#00D4FF]/15 transition-all w-full sm:w-auto">
+        <Clock size={14} />
+        <span>{now.toLocaleTimeString('en-US', timeOptions)}</span>
+      </div>
+    </div>
+  );
+};
+
+// REPLACE THIS SECTION: Fetch data asli dari Open-Meteo & Layout Baru
+// Alasan: Menghapus fixed min-width yang memaksa ruang kosong berlebih. Menggunakan w-full, h-full, dan justify-between agar menyesuaikan tinggi kontainer secara otomatis dan vertikalnya selaras.
+const WeatherWidget = () => {
+  const [weather, setWeather] = useState({ temp: 0, feelsLike: 0, humidity: 0, windSpeed: 0, code: 0, loading: true, error: false });
+
+  useEffect(() => {
+    const fetchWeather = async () => {
+      try {
+        // Fetch Real Weather Data for Kebomas, Gresik
+        const res = await fetch('https://api.open-meteo.com/v1/forecast?latitude=-7.169&longitude=112.641&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m');
+        if (!res.ok) throw new Error('API Error');
+        const data = await res.json();
+        setWeather({ 
+          temp: Math.round(data.current.temperature_2m), 
+          feelsLike: Math.round(data.current.apparent_temperature),
+          humidity: Math.round(data.current.relative_humidity_2m),
+          windSpeed: Math.round(data.current.wind_speed_10m),
+          code: data.current.weather_code, 
+          loading: false,
+          error: false
+        });
+      } catch (e) {
+        setWeather(prev => ({ ...prev, loading: false, error: true })); 
+      }
+    };
+    fetchWeather();
+    const intervalId = setInterval(fetchWeather, 15 * 60 * 1000); // Auto-refresh setiap 15 menit
+    return () => clearInterval(intervalId);
+  }, []);
+
+  if (weather.loading) {
+    return <div className="animate-pulse bg-gradient-to-br from-[#0A0E17]/90 to-[#151B26]/90 border border-gray-700/50 h-[180px] w-full xl:w-[320px] rounded-[24px] shadow-lg"></div>;
+  }
+
+  if (weather.error) {
+    return (
+      <div className="flex flex-col justify-center items-center gap-3 p-6 bg-red-500/10 border border-red-500/20 rounded-[24px] w-full xl:w-[320px] shadow-lg min-h-[180px]">
+        <CloudOff className="text-red-400" size={32} />
+        <span className="text-sm text-red-400 font-bold tracking-wide">WEATHER UNAVAILABLE</span>
+      </div>
+    );
+  }
+
+  // WMO Weather code mapping
+  const getWeatherDetails = (code) => {
+    if (code === 0) return { icon: Sun, label: 'Sunny', color: 'text-amber-400', bg: 'bg-amber-400/10' };
+    if (code >= 1 && code <= 3) return { icon: Cloud, label: 'Cloudy', color: 'text-blue-300', bg: 'bg-blue-400/10' };
+    if (code >= 51 && code <= 65) return { icon: CloudRain, label: 'Rainy', color: 'text-blue-500', bg: 'bg-blue-500/10' };
+    if (code >= 95) return { icon: CloudLightning, label: 'Stormy', color: 'text-purple-400', bg: 'bg-purple-500/10' };
+    return { icon: Cloud, label: 'Cloudy', color: 'text-gray-300', bg: 'bg-gray-500/10' };
+  };
+
+  const { icon: Icon, label, color, bg } = getWeatherDetails(weather.code);
+
+  return (
+    <div className="flex flex-col justify-between bg-gradient-to-br from-[#0A0E17]/90 to-[#151B26]/90 backdrop-blur-xl border border-gray-700/50 rounded-[24px] shadow-[0_8px_32px_rgba(0,0,0,0.2)] p-4 sm:p-5 hover:border-[#00D4FF]/30 transition-all duration-300 w-full cursor-default relative overflow-hidden group h-full">
+      {/* Decorative background glow */}
+      <div className="absolute -top-10 -right-10 w-32 h-32 bg-[#00D4FF]/5 rounded-full blur-2xl group-hover:bg-[#00D4FF]/10 transition-colors pointer-events-none"></div>
+
+      {/* Top Row: Main Temp & Location */}
+      <div className="flex items-center justify-between mb-3 pb-3 border-b border-gray-700/50 relative z-10">
+         <div className="flex items-center gap-3 sm:gap-4">
+            <div className={`p-2.5 sm:p-3 rounded-2xl ${bg} border border-white/5 shadow-inner`}>
+              <Icon size={24} className={color} />
+            </div>
+            <div className="flex flex-col">
+              <div className="flex items-baseline gap-1">
+                <span className="text-2xl sm:text-3xl font-black text-white leading-none tracking-tighter">{weather.temp}°<span className="text-lg sm:text-xl text-gray-400 font-bold">C</span></span>
+              </div>
+              <span className="text-[10px] sm:text-[11px] font-bold text-[#00D4FF] uppercase tracking-widest mt-1">{label}</span>
+            </div>
+         </div>
+         <div className="text-right pl-2">
+            <span className="block text-[11px] sm:text-xs text-gray-400 font-semibold leading-tight">Kebomas,</span>
+            <span className="block text-xs sm:text-sm text-gray-200 font-bold tracking-wide">Gresik</span>
+         </div>
+      </div>
+      
+      {/* Bottom Row: Detail Cards */}
+      <div className="grid grid-cols-3 gap-2 relative z-10">
+         <div className="flex flex-col items-center justify-center p-2 sm:p-2.5 bg-white/[0.03] hover:bg-white/[0.06] transition-colors rounded-xl border border-white/5">
+            <Thermometer size={14} className="text-amber-400 mb-1" />
+            <span className="text-[9px] text-gray-500 uppercase tracking-widest mb-0.5 font-bold">Feels</span>
+            <span className="text-[11px] sm:text-xs font-black text-white">{weather.feelsLike}°C</span>
+         </div>
+         <div className="flex flex-col items-center justify-center p-2 sm:p-2.5 bg-white/[0.03] hover:bg-white/[0.06] transition-colors rounded-xl border border-white/5">
+            <Droplets size={14} className="text-blue-400 mb-1" />
+            <span className="text-[9px] text-gray-500 uppercase tracking-widest mb-0.5 font-bold">Humid</span>
+            <span className="text-[11px] sm:text-xs font-black text-white">{weather.humidity}%</span>
+         </div>
+         <div className="flex flex-col items-center justify-center p-2 sm:p-2.5 bg-white/[0.03] hover:bg-white/[0.06] transition-colors rounded-xl border border-white/5">
+            <Wind size={14} className="text-emerald-400 mb-1" />
+            <span className="text-[9px] text-gray-500 uppercase tracking-widest mb-0.5 font-bold">Wind</span>
+            <span className="text-[11px] sm:text-xs font-black text-white flex items-baseline gap-0.5">{weather.windSpeed}<span className="text-[9px] font-semibold text-gray-400">km/h</span></span>
+         </div>
+      </div>
+    </div>
+  );
+};
+
 const GreetingCard = ({ userName, children, isCloudConnected }: any) => {
   const hour = new Date().getHours();
   let greeting = '';
@@ -679,51 +818,63 @@ const GreetingCard = ({ userName, children, isCloudConnected }: any) => {
 
   const displayName = userName ? userName.split(' ')[0] : 'User';
 
+  // REPLACE THIS SECTION: Perbaikan Rasio Responsif Desktop (~45%, ~35%, ~20%) dan pembungkus vertikal
+  // Alasan: Membagi flex layout untuk Mobile (100%), Tablet (Baris 1: 55% + 40%, Baris 2: 100%), dan Desktop (45% + 35% + 20% satu baris). Memakai items-stretch agar tinggi selaras.
   return (
-    <div className="w-full bg-[#151B26]/60 backdrop-blur-md border border-[#00D4FF]/20 p-5 sm:p-6 rounded-2xl shadow-lg animation-fade-in relative overflow-hidden flex flex-col md:flex-row justify-between items-start md:items-center gap-5 md:gap-6 mb-4 sm:mb-6">
-      <div className="absolute top-0 right-0 w-64 h-full bg-gradient-to-l from-[#00D4FF]/5 to-transparent pointer-events-none"></div>
+    <div className="w-full bg-[#151B26]/80 backdrop-blur-xl border border-[#00D4FF]/20 p-5 lg:p-6 rounded-[24px] shadow-[0_8px_32px_rgba(0,0,0,0.3)] animation-fade-in relative overflow-hidden flex flex-col md:flex-row md:flex-wrap lg:flex-nowrap justify-between items-stretch gap-4 lg:gap-5 mb-6 sm:mb-8 transition-all">
+      <div className="absolute top-0 right-0 w-full h-full bg-gradient-to-bl from-[#00D4FF]/5 via-transparent to-transparent pointer-events-none"></div>
+      <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-[#3B82F6]/10 blur-[100px] rounded-full pointer-events-none"></div>
       
-      {/* KIRI: Sapaan */}
-      <div className="flex items-center gap-4 sm:gap-5 relative z-10 w-full md:w-auto">
-        <div className="text-4xl sm:text-5xl drop-shadow-[0_0_15px_rgba(255,255,255,0.3)] select-none">
-          {emoji}
+      {/* KIRI: Sapaan (~45% di Desktop, ~55% di Tablet) */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 relative z-10 w-full md:w-[55%] lg:w-[45%]">
+        <div className="flex-shrink-0 bg-[#0A0E17]/60 p-3.5 rounded-2xl border border-white/5 shadow-inner flex items-center justify-center">
+          <span className="text-4xl drop-shadow-[0_0_20px_rgba(255,255,255,0.2)] select-none leading-none">
+            {emoji}
+          </span>
         </div>
-        <div className="flex-1">
-          <h2 className="text-2xl sm:text-3xl font-black text-white mb-1 tracking-tight">
+        <div className="flex-1 w-full flex flex-col justify-center">
+          <h2 className="text-2xl sm:text-3xl font-black text-white mb-1 tracking-tight leading-tight">
             {greeting}, <span className="bg-clip-text text-transparent bg-gradient-to-r from-[#00D4FF] to-[#3B82F6]">{displayName}</span>
           </h2>
-          <p className="text-gray-400 font-medium text-sm sm:text-base leading-relaxed">
+          <p className="text-gray-400 font-medium text-xs sm:text-sm leading-relaxed max-w-sm lg:max-w-md">
             {subtitle}
           </p>
+          <DateTimeDisplay />
         </div>
       </div>
 
-      {/* KANAN: Cloud Status & Children (misal: tombol Add Student) */}
-      <div className="relative z-10 w-full md:w-auto flex flex-col md:items-end gap-3 sm:gap-4">
+      {/* TENGAH: Widget Cuaca (~35% di Desktop, ~40% di Tablet) */}
+      <div className="relative z-10 w-full md:w-[40%] lg:w-[35%] shrink-0 flex">
+         <WeatherWidget />
+      </div>
+
+      {/* KANAN: Cloud Status & Children (~20% di Desktop) */}
+      <div className="relative z-10 w-full lg:w-[18%] lg:flex-1 flex flex-col md:flex-row lg:flex-col justify-center items-stretch md:items-center lg:items-end gap-3 shrink-0">
         
-        {/* Status Cloud Real-time Badge (Modern UI) */}
-        <div className={`flex items-center gap-3 px-4 py-2 sm:py-2.5 rounded-xl border backdrop-blur-md transition-all duration-500 shadow-sm w-full md:w-auto justify-start md:justify-center ${
+        {/* Status Cloud Real-time Badge */}
+        <div className={`flex lg:flex-col xl:flex-row items-center gap-3 px-3.5 py-3 rounded-[20px] border backdrop-blur-md transition-all duration-500 shadow-md w-full justify-start xl:justify-center h-full sm:h-auto lg:h-full ${
             isCloudConnected 
-            ? 'bg-emerald-500/10 border-emerald-500/20 shadow-[0_0_15px_rgba(16,185,129,0.1)]' 
-            : 'bg-rose-500/10 border-rose-500/20 shadow-[0_0_15px_rgba(244,63,94,0.1)]'
+            ? 'bg-emerald-500/10 border-emerald-500/20 shadow-[0_8px_20px_rgba(16,185,129,0.1)]' 
+            : 'bg-rose-500/10 border-rose-500/20 shadow-[0_8px_20px_rgba(244,63,94,0.1)]'
         }`}>
-           <div className="relative flex items-center justify-center">
-              {isCloudConnected ? <Cloud className="text-emerald-400" size={20} /> : <CloudOff className="text-rose-400" size={20} />}
-              <span className="absolute -bottom-0.5 -right-0.5 flex h-2.5 w-2.5">
+           <div className="relative flex items-center justify-center flex-shrink-0">
+              <div className={`p-2 rounded-xl ${isCloudConnected ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+                 {isCloudConnected ? <Cloud size={20} /> : <CloudOff size={20} />}
+              </div>
+              <span className="absolute -bottom-0.5 -right-0.5 flex h-3 w-3">
                   {isCloudConnected && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
-                  <span className={`relative inline-flex rounded-full h-2.5 w-2.5 border-2 border-[#151B26] ${isCloudConnected ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+                  <span className={`relative inline-flex rounded-full h-3 w-3 border-[2px] border-[#151B26] ${isCloudConnected ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
               </span>
            </div>
-           <div className="flex flex-col">
-              <span className="text-[10px] sm:text-xs text-gray-400 font-medium leading-none mb-1 text-left">Cloud Status</span>
-              <span className={`text-sm sm:text-base font-semibold leading-none flex items-center gap-1.5 ${isCloudConnected ? 'text-emerald-400' : 'text-rose-400'}`}>
-                 {isCloudConnected ? 'Connected' : 'Offline Mode'}
-                 {isCloudConnected ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+           <div className="flex flex-col lg:items-center xl:items-start text-left lg:text-center xl:text-left">
+              <span className="text-[9px] text-gray-400 font-bold uppercase tracking-widest leading-none mb-1">System Status</span>
+              <span className={`text-xs sm:text-sm font-black leading-none flex items-center justify-start lg:justify-center xl:justify-start gap-1 tracking-wide ${isCloudConnected ? 'text-emerald-400' : 'text-rose-400'}`}>
+                 {isCloudConnected ? 'CONNECTED' : 'OFFLINE MODE'}
               </span>
            </div>
         </div>
 
-        {/* Children Render (Tutor Tasks, Add New Student, dll) */}
+        {/* Children Render */}
         {children && (
           <div className="w-full">
             {children}
@@ -985,11 +1136,10 @@ const AdminDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
       .sort((a, b) => a.date.localeCompare(b.date))
       .slice(0, 5);
 
+  // DELETE THIS: "Add New Student" button from AdminDashboard
   return (
     <div className="space-y-4 sm:space-y-6 animation-fade-in w-full max-w-full overflow-hidden font-sans">
-      <GreetingCard userName={user?.name} isCloudConnected={isCloudConnected}>
-         <Button onClick={() => setActiveTab('students')} icon={Plus} className="w-full sm:w-auto min-h-[44px] justify-center shadow-[0_0_20px_rgba(0,212,255,0.3)]">Add New Student</Button>
-      </GreetingCard>
+      <GreetingCard userName={user?.name} isCloudConnected={isCloudConnected} />
 
       {/* 6 Main Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4">
@@ -1141,7 +1291,8 @@ const TutorDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
   const assessmentsPending = Math.max(0, myStudents - assessmentsDone);
 
   const classesCompletedMonth = db.calendar.filter(c => c.tutor === user.name && c.date.startsWith(monthPrefix) && c.date <= today).length;
-  const teachingHours = classesCompletedMonth * 1.5;
+  // REPLACE THIS SECTION: Mengubah pengali durasi kelas menjadi 1 jam
+  const teachingHours = classesCompletedMonth * 1;
 
   const classProgressData = SESSIONS.map(session => {
      const studentsInSess = db.students.filter(s => s.status === 'Active' && getSessionGroup(s.class) === session).length;
