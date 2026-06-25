@@ -158,7 +158,7 @@ const generateAutoComment = (student, attRate, avgScore, assessments) => {
            const closings = [
                `Terus pertahankan semangat belajar yang luar biasa ini ya!`,
                `Tetap semangat bermain dan belajar bahasa Inggris bersama teman-teman!`,
-               `Good job, ${name}! Teruslah berprestasi.`
+               `Good job!, ${name}! Teruslah berprestasi.`
            ];
            comment = pick(intros) + pick(strengths) + pick(closings);
        } else if (avgScore >= 70) {
