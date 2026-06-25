@@ -111,15 +111,27 @@ const getSessionGroup = (className) => {
   return SESSIONS[4];
 };
 
+// PERBAIKAN KRITIS: Memaksa aplikasi menggunakan waktu lokal perangkat (Local Time) 
+// untuk menghindari pergeseran tanggal UTC saat aplikasi diakses pagi hari (sebelum jam 7 pagi WIB).
+const getTodayDateLocal = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
 const calculateDaysLeft = (targetDate, todayDate) => {
-  const t = new Date(targetDate).getTime();
-  const d = new Date(todayDate).getTime();
-  const diff = Math.ceil((t - d) / (1000 * 3600 * 24));
+  // PERBAIKAN KRITIS: Parsing string secara eksplisit agar bebas dari pengaruh Timezone Browser
+  const [tYear, tMonth, tDay] = targetDate.split('-').map(Number);
+  const [dYear, dMonth, dDay] = todayDate.split('-').map(Number);
+  
+  const t = new Date(tYear, tMonth - 1, tDay).getTime();
+  const d = new Date(dYear, dMonth - 1, dDay).getTime();
+  const diff = Math.round((t - d) / (1000 * 3600 * 24));
+  
   if (diff === 0) return 'Today';
   if (diff === 1) return 'Tomorrow';
   if (diff < 0) return 'Passed';
@@ -1462,7 +1474,7 @@ const TutorDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
 };
 
 const Dashboard = ({ db, user, setActiveTab, isCloudConnected }: any) => {
-  const today = new Date().toISOString().split('T')[0];
+  const today = getTodayDateLocal();
   if (user.role === 'student') {
     return <StudentDashboard db={db} user={user} setActiveTab={setActiveTab} today={today} isCloudConnected={isCloudConnected} />;
   }
@@ -2133,7 +2145,7 @@ function TutorsModule({ db, setDb, generateId, showToast, softDelete }) {
 }
 
 function StudentAttendanceModule({ db, setDb, showToast, softDelete }) {
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(getTodayDateLocal());
   const [sessionGroup, setSessionGroup] = useState(SESSIONS[0]);
   const [attendanceData, setAttendanceData] = useState({});
   const [editingId, setEditingId] = useState(null);
@@ -2249,7 +2261,7 @@ function TutorAttendanceModule({ db, setDb, user, showToast, softDelete }) {
   const handleCheckIn = () => {
     const dateObj = new Date();
     // Gunakan waktu lokal agar tidak terjadi lompatan hari zona waktu (UTC issue)
-    const today = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+    const today = getTodayDateLocal();
     const day = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
     const time = dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
@@ -2528,7 +2540,7 @@ function PaymentsModule({ db, setDb, generateId, showToast, handlePrint, handleS
     const amt = amounts[student.id];
     if (!amt || amt <= 0) return showToast('Enter valid amount', 'error');
     const sSession = getSessionGroup(student.class);
-    const rec = { id: generateId('INV', 'payments'), studentId: student.id, studentName: student.name, level: student.level, class: student.class, sessionGroup: sSession, amount: amt, month: String(month), year: String(year), date: new Date().toISOString().split('T')[0], method: 'Transfer', status: 'Paid' };
+    const rec = { id: generateId('INV', 'payments'), studentId: student.id, studentName: student.name, level: student.level, class: student.class, sessionGroup: sSession, amount: amt, month: String(month), year: String(year), date: getTodayDateLocal(), method: 'Transfer', status: 'Paid' };
     setDb((p) => ({ ...p, payments: [...p.payments, rec] }));
     showToast(`Payment recorded`);
     setAmounts((p) => ({ ...p, [student.id]: '' }));
@@ -2737,7 +2749,7 @@ function PayrollModule({ db, setDb, generateId, showToast, handlePrint, handleSh
     if (!formData.tutorId || base <= 0) return showToast('Tutor and Base Salary required.', 'error');
     const proceed = () => {
       const tutor = db.tutors.find((t) => t.id === formData.tutorId);
-      const payrollRecord = { id: isEditingId ? isEditingId : generateId('PRL', 'payroll'), tutorId: tutor.id, tutorName: tutor.name, month: String(formData.month), year: String(formData.year), baseSalary: base, totalMeetings: meetings, basicSalary: basicSalary, otherAllowances: allowances, bonus: bonus, totalPaid: totalPayroll, status: targetStatus, date: new Date().toISOString().split('T')[0] };
+      const payrollRecord = { id: isEditingId ? isEditingId : generateId('PRL', 'payroll'), tutorId: tutor.id, tutorName: tutor.name, month: String(formData.month), year: String(formData.year), baseSalary: base, totalMeetings: meetings, basicSalary: basicSalary, otherAllowances: allowances, bonus: bonus, totalPaid: totalPayroll, status: targetStatus, date: getTodayDateLocal() };
       setDb((prev) => ({ ...prev, payroll: isEditingId ? prev.payroll.map((p) => (p.id === isEditingId ? payrollRecord : p)) : [...prev.payroll, payrollRecord] }));
       showToast(targetStatus === 'Paid' ? 'Payroll marked as Paid!' : 'Draft Saved!');
       setIsAdding(false); setIsEditingId(null); setFormData(initialForm);
@@ -2898,7 +2910,7 @@ function PayrollModule({ db, setDb, generateId, showToast, handlePrint, handleSh
 }
 
 function JournalsModule({ db, setDb, user, showToast, generateId, softDelete }) {
-  const [formData, setFormData] = useState({ date: new Date().toISOString().split('T')[0], sessionGroup: SESSIONS[0], topic: '', activities: '', notes: '', followUp: '' });
+  const [formData, setFormData] = useState({ date: getTodayDateLocal(), sessionGroup: SESSIONS[0], topic: '', activities: '', notes: '', followUp: '' });
   const [isEditingId, setIsEditingId] = useState(null);
 
   const handleSave = (e) => {
@@ -2910,7 +2922,7 @@ function JournalsModule({ db, setDb, user, showToast, generateId, softDelete }) 
       setDb((prev) => ({ ...prev, journals: [ ...prev.journals, { id: generateId('JRN', 'journals'), ...formData, tutorName: user.name } ] }));
       showToast('Journal saved');
     }
-    setFormData({ date: new Date().toISOString().split('T')[0], sessionGroup: SESSIONS[0], topic: '', activities: '', notes: '', followUp: '' });
+    setFormData({ date: getTodayDateLocal(), sessionGroup: SESSIONS[0], topic: '', activities: '', notes: '', followUp: '' });
   };
 
   return (
@@ -2970,7 +2982,7 @@ function AnnouncementsModule({ db, setDb, generateId, user, showToast, softDelet
       setDb((p) => ({ ...p, announcements: p.announcements.map((a) => a.id === isEditingId ? { ...a, ...formData } : a ) }));
       showToast('Updated'); setIsEditingId(null); setIsAdding(false);
     } else {
-      setDb((p) => ({ ...p, announcements: [ ...p.announcements, { id: generateId('ANN', 'announcements'), ...formData, date: new Date().toISOString().split('T')[0], author: user.name } ] }));
+      setDb((p) => ({ ...p, announcements: [ ...p.announcements, { id: generateId('ANN', 'announcements'), ...formData, date: getTodayDateLocal(), author: user.name } ] }));
       showToast('Published'); setIsAdding(false);
     }
     setFormData({ title: '', content: '' });
