@@ -51,7 +51,10 @@ import {
   CloudLightning,
   Droplets,
   Wind,
-  Thermometer
+  Thermometer,
+  Link as LinkIcon,
+  MessageCircle,
+  Check
 } from 'lucide-react';
 
 declare global {
@@ -413,6 +416,7 @@ const generateDummyDatabase = () => {
     calendar: [],
     announcements: [],
     recycleBin: [],
+    materials: [],
   };
 
   const names = [
@@ -1487,7 +1491,7 @@ const Dashboard = ({ db, user, setActiveTab, isCloudConnected }: any) => {
 export default function App() {
   const [db, setDb] = useState({
     users: [], students: [], tutors: [], studentAttendance: [], tutorAttendance: [],
-    journals: [], assessments: [], payments: [], payroll: [], calendar: [], announcements: [], recycleBin: []
+    journals: [], assessments: [], payments: [], payroll: [], calendar: [], announcements: [], recycleBin: [], materials: []
   });
 
   const [currentUser, setCurrentUser] = useState(null);
@@ -1777,9 +1781,9 @@ export default function App() {
     { id: 'my_journals', label: 'My Learning Journal', icon: BookOpen, roles: ['student'] }, // Khusus Student
     { id: 'assessments', label: 'Monthly Assessment', icon: CheckSquare, roles: ['admin', 'tutor'] },
     { id: 'my_assessments', label: 'My Assessment', icon: Award, roles: ['student'] }, // Khusus Student
-// ADD START
+    { id: 'materials', label: 'Materials & Tasks', icon: LinkIcon, roles: ['admin', 'tutor'] },
+    { id: 'my_materials', label: 'My Materials', icon: LinkIcon, roles: ['student'] }, // Khusus Student
     { id: 'my_report', label: 'My Academic Report', icon: FileText, roles: ['student'] }, // Khusus Student
-// ADD END
     { id: 'payments', label: 'Payments', icon: DollarSign, roles: ['admin'] },
     { id: 'my_payments', label: 'My Payment Status', icon: DollarSign, roles: ['student'] }, // Khusus Student
     { id: 'payroll', label: 'Payroll', icon: FileText, roles: ['admin'] },
@@ -1811,10 +1815,12 @@ export default function App() {
         return <AssessmentsModule db={db} setDb={setDb} generateId={generateId} showToast={showToast} />;
       case 'my_assessments': // STUDENT: Read Only Assessment
         return <StudentReadOnlyAssessmentModule db={db} user={currentUser} />;
-// ADD START
+      case 'materials': // TUTOR & ADMIN: Manage Materials & Tasks
+        return <MaterialsModule db={db} setDb={setDb} generateId={generateId} showToast={showToast} softDelete={softDelete} user={currentUser} />;
+      case 'my_materials': // STUDENT: View Materials & Submit Comment
+        return <StudentMaterialsModule db={db} setDb={setDb} user={currentUser} showToast={showToast} />;
       case 'my_report': // STUDENT: Academic Report
         return <StudentReadOnlyReportModule db={db} user={currentUser} downloadPNG={downloadPNG} handleShareImage={handleShareImage} />;
-// ADD END
       case 'payments':
         return (
           <PaymentsModule
@@ -2037,7 +2043,7 @@ function StudentsModule({ db, setDb, generateId, showToast, softDelete, user }) 
         </Card>
       )}
       <Card className="p-0 overflow-x-auto">
-        <div className="p-4 bg-[#0A0E17] border-b border-gray-800 flex flex-col md:flex-row gap-4">
+        <div className="p-4 bg-[#0A0E17] border-b border-gray-800 flex items-center justify-between flex-wrap gap-3">
           <input type="text" placeholder="Search students..." className="flex-1 bg-[#151B26] border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-[#00D4FF]" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
           <select className="w-full md:w-64 bg-[#151B26] border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-[#00D4FF]" value={filterLevel} onChange={(e) => setFilterLevel(e.target.value)}>
             <option value="">All Levels</option>
@@ -4405,6 +4411,240 @@ function RecycleBinModule({ db, setDb, showToast, requestConfirm }) {
         </tbody>
       </table>
     </Card>
+  );
+}
+
+function MaterialsModule({ db, setDb, generateId, showToast, softDelete, user }) {
+  const [formData, setFormData] = useState({ title: '', sessionGroup: SESSIONS[0], link: '', notes: '' });
+  const [isAdding, setIsAdding] = useState(false);
+
+  const handleSave = (e) => {
+    e.preventDefault();
+    if (!formData.link) return showToast('Link cannot be empty', 'error');
+    
+    const newMat = {
+      id: generateId('MAT', 'materials'),
+      ...formData,
+      tutorId: user.id,
+      tutorName: user.name,
+      date: getTodayDateLocal(),
+      submissions: []
+    };
+    setDb(p => ({ ...p, materials: [...(p.materials || []), newMat] }));
+    showToast('Material posted successfully');
+    setIsAdding(false);
+    setFormData({ title: '', sessionGroup: SESSIONS[0], link: '', notes: '' });
+  };
+
+  const toggleCheck = (matId, subIdx) => {
+    setDb(p => {
+      const newMats = [...(p.materials || [])];
+      const matIdx = newMats.findIndex(m => m.id === matId);
+      if (matIdx > -1) {
+        newMats[matIdx].submissions[subIdx].checked = !newMats[matIdx].submissions[subIdx].checked;
+      }
+      return { ...p, materials: newMats };
+    });
+  };
+
+  const myMats = (db.materials || []).filter(m => user.role === 'admin' ? true : m.sessionGroup === user.teachingSession).reverse();
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-white">Materials & Tasks</h2>
+        <Button onClick={() => setIsAdding(!isAdding)} icon={Plus}>Add Material</Button>
+      </div>
+
+      {isAdding && (
+        <Card>
+          <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Input label="Material Title" value={formData.title} onChange={v => setFormData({...formData, title: v})} required />
+            <Input label="Session Group" type="select" options={SESSIONS} value={formData.sessionGroup} onChange={v => setFormData({...formData, sessionGroup: v})} required />
+            <div className="md:col-span-2">
+               <Input label="Link (YouTube / Website)" type="url" value={formData.link} onChange={v => setFormData({...formData, link: v})} placeholder="https://..." required />
+            </div>
+            <div className="md:col-span-2 mb-4">
+              <label className="block text-sm text-gray-400 mb-1.5">Notes / Instructions</label>
+              <textarea className="w-full bg-[#0B0F19] border border-gray-700 rounded-lg p-3 text-white h-24 focus:border-[#00D4FF]" value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})} required placeholder="e.g. Watch this video and write 3 sentences." />
+            </div>
+            <div className="md:col-span-2 flex justify-center gap-2">
+              <Button variant="ghost" onClick={() => setIsAdding(false)}>Cancel</Button>
+              <Button type="submit">Publish Material</Button>
+            </div>
+          </form>
+        </Card>
+      )}
+
+      <div className="space-y-4">
+        {myMats.map(mat => (
+          <Card key={mat.id} className="border-t-4 border-t-[#00D4FF] p-0 overflow-hidden">
+            <div className="p-5 border-b border-gray-800 bg-[#151B26] flex justify-between items-start">
+               <div>
+                  <h3 className="text-lg font-bold text-white mb-1">{mat.title}</h3>
+                  <div className="flex items-center gap-3 text-sm text-gray-400">
+                     <span className="text-[#00D4FF] font-medium">{mat.sessionGroup}</span>
+                     <span>•</span>
+                     <span>{mat.date} by {mat.tutorName}</span>
+                  </div>
+               </div>
+               <button onClick={() => softDelete('materials', mat.id, 'Material')} className="text-red-400 hover:text-red-300 p-2"><Trash2 size={18} /></button>
+            </div>
+            <div className="p-5 bg-[#0B0F19]">
+               <a href={mat.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-blue-400 hover:text-blue-300 bg-blue-500/10 px-4 py-2 rounded-lg mb-4 text-sm font-medium transition-colors">
+                  <LinkIcon size={16} /> Open Link
+               </a>
+               <p className="text-gray-300 text-sm whitespace-pre-wrap leading-relaxed mb-6 bg-[#151B26] p-4 rounded-lg border border-gray-800">{mat.notes}</p>
+               
+               <div className="mt-4">
+                  <h4 className="text-sm font-bold text-white mb-3 flex items-center gap-2"><MessageCircle size={16} className="text-purple-400"/> Student Submissions ({(mat.submissions || []).length})</h4>
+                  <div className="space-y-3">
+                     {(mat.submissions || []).map((sub, idx) => (
+                        <div key={idx} className={`p-4 rounded-xl border flex justify-between items-start gap-4 transition-colors ${sub.checked ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-[#1A2234] border-gray-700'}`}>
+                           <div className="flex-1">
+                              <p className="font-bold text-white text-sm mb-1">{sub.studentName} <span className="text-xs text-gray-500 font-normal ml-2">{sub.date}</span></p>
+                              <p className="text-gray-300 text-sm">{sub.text}</p>
+                           </div>
+                           <button 
+                             onClick={() => toggleCheck(mat.id, idx)} 
+                             className={`p-2 rounded-lg transition-colors flex-shrink-0 ${sub.checked ? 'bg-emerald-500 text-white' : 'bg-gray-700 text-gray-400 hover:text-white hover:bg-gray-600'}`}
+                             title={sub.checked ? 'Mark as Unchecked' : 'Mark as Checked'}
+                           >
+                              <Check size={16} />
+                           </button>
+                        </div>
+                     ))}
+                     {(mat.submissions || []).length === 0 && <p className="text-xs text-gray-500 italic">No submissions yet.</p>}
+                  </div>
+               </div>
+            </div>
+          </Card>
+        ))}
+        {myMats.length === 0 && <div className="p-8 text-center text-gray-500 bg-[#151B26] rounded-xl border border-gray-800">No materials posted yet.</div>}
+      </div>
+    </div>
+  );
+}
+
+function StudentMaterialsModule({ db, setDb, user, showToast }) {
+  const [comment, setComment] = useState({});
+
+  const student = db.students.find(s => s.id === user.studentId);
+  const myGroup = student ? getSessionGroup(student.class) : '';
+  const myMats = (db.materials || []).filter(m => m.sessionGroup === myGroup).reverse();
+
+  const getYoutubeThumbnail = (url) => {
+     if(!url) return null;
+     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+     const match = url.match(regExp);
+     return (match && match[2].length === 11) ? `https://img.youtube.com/vi/${match[2]}/hqdefault.jpg` : null;
+  };
+
+  const handleSubmitComment = (matId) => {
+    if (!comment[matId]?.trim()) return showToast('Please write your comment or submission first', 'warning');
+    
+    setDb(p => {
+      const newMats = [...(p.materials || [])];
+      const matIdx = newMats.findIndex(m => m.id === matId);
+      if (matIdx > -1) {
+        newMats[matIdx].submissions = [...(newMats[matIdx].submissions || []), {
+          studentId: student.id,
+          studentName: student.name,
+          text: comment[matId],
+          date: new Date().toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' }),
+          checked: false
+        }];
+      }
+      return { ...p, materials: newMats };
+    });
+    
+    showToast('Submission sent successfully!');
+    setComment(p => ({ ...p, [matId]: '' }));
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold text-white mb-1">My Materials & Tasks</h2>
+        <p className="text-sm text-gray-400">View materials, watch videos, and submit your tasks/comments below.</p>
+      </div>
+
+      <div className="space-y-6">
+        {myMats.map(mat => {
+          const ytThumb = getYoutubeThumbnail(mat.link);
+          const mySubmissions = (mat.submissions || []).filter(s => s.studentId === student.id);
+          
+          return (
+            <Card key={mat.id} className="p-0 overflow-hidden border border-gray-800 shadow-xl">
+               <div className="flex flex-col md:flex-row border-b border-gray-800 bg-[#151B26]">
+                  <div className="w-full md:w-64 h-48 md:h-auto bg-black flex-shrink-0 relative group">
+                     {ytThumb ? (
+                        <>
+                           <img src={ytThumb} alt="Thumbnail" className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+                           <a href={mat.link} target="_blank" rel="noopener noreferrer" className="absolute inset-0 flex items-center justify-center">
+                              <div className="w-12 h-12 bg-red-600 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(220,38,38,0.5)] group-hover:scale-110 transition-transform">
+                                 <div className="w-0 h-0 border-t-8 border-b-8 border-l-[14px] border-transparent border-l-white ml-1"></div>
+                              </div>
+                           </a>
+                        </>
+                     ) : (
+                        <a href={mat.link} target="_blank" rel="noopener noreferrer" className="w-full h-full flex flex-col items-center justify-center text-blue-400 hover:text-blue-300 hover:bg-blue-900/20 transition-colors gap-3 py-10">
+                           <LinkIcon size={40} />
+                           <span className="text-sm font-semibold">Open External Link</span>
+                        </a>
+                     )}
+                  </div>
+                  
+                  <div className="p-5 flex-1">
+                     <div className="mb-4 border-b border-gray-800/50 pb-3">
+                        <h3 className="text-xl font-bold text-white mb-1 leading-tight">{mat.title}</h3>
+                        <p className="text-xs text-gray-400">Posted on {mat.date} by <span className="text-[#00D4FF]">{mat.tutorName}</span></p>
+                     </div>
+                     <p className="text-gray-300 text-sm whitespace-pre-wrap leading-relaxed">{mat.notes}</p>
+                  </div>
+               </div>
+
+               <div className="p-5 bg-[#0B0F19]">
+                  <h4 className="text-sm font-bold text-white mb-3 flex items-center gap-2"><MessageCircle size={16} className="text-[#00D4FF]" /> Task Submission / Comment</h4>
+                  
+                  {mySubmissions.length > 0 && (
+                     <div className="mb-4 space-y-2">
+                        {mySubmissions.map((sub, idx) => (
+                           <div key={idx} className="bg-[#151B26] p-3 rounded-lg border border-gray-800 flex justify-between items-start">
+                              <div>
+                                 <p className="text-gray-300 text-sm">{sub.text}</p>
+                                 <p className="text-[10px] text-gray-500 mt-1">{sub.date}</p>
+                              </div>
+                              {sub.checked && <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded-full font-bold flex items-center gap-1"><Check size={12}/> Checked by Tutor</span>}
+                           </div>
+                        ))}
+                     </div>
+                  )}
+
+                  <div className="flex gap-3 mt-2">
+                     <input 
+                        type="text" 
+                        value={comment[mat.id] || ''} 
+                        onChange={e => setComment(p => ({...p, [mat.id]: e.target.value}))}
+                        placeholder="Write your answer or comment here..."
+                        className="flex-1 bg-[#151B26] border border-gray-700 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-[#00D4FF]"
+                        onKeyDown={e => { if (e.key === 'Enter') handleSubmitComment(mat.id); }}
+                     />
+                     <Button onClick={() => handleSubmitComment(mat.id)} className="px-6 shadow-md">Submit</Button>
+                  </div>
+               </div>
+            </Card>
+          );
+        })}
+        {myMats.length === 0 && (
+           <div className="p-12 text-center bg-[#151B26] border border-gray-800 rounded-xl shadow-md">
+              <BookOpen size={48} className="mx-auto text-gray-700 mb-4" />
+              <h3 className="text-lg font-bold text-white mb-1">No Materials Yet</h3>
+              <p className="text-gray-400 text-sm">Your tutor hasn't posted any materials or tasks for your session.</p>
+           </div>
+        )}
+      </div>
+    </div>
   );
 }
 
