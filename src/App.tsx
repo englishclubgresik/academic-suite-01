@@ -1122,14 +1122,25 @@ const AdminDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
   const totalRevenueAmount = currentMonthPayments.filter(p => p.status === 'Paid').reduce((sum, p) => sum + Number(p.amount), 0);
   const paidInvoicesCount = currentMonthPayments.filter(p => p.status === 'Paid').length;
 
+  // ADD THIS: Inisialisasi variabel untuk menampung total potensi pendapatan yang belum masuk
+  let totalOutstandingRevenueAmount = 0;
+
   const sessionRevenueData = SESSIONS.map(session => {
       const sessionStudents = db.students.filter(s => s.status === 'Active' && getSessionGroup(s.class) === session).length;
       const sessionPayments = currentMonthPayments.filter(p => p.sessionGroup === session && p.status === 'Paid');
       const sessionCollected = sessionPayments.reduce((sum, p) => sum + Number(p.amount), 0);
       const sessionPaidCount = sessionPayments.length;
       const sessionOutstanding = sessionStudents - sessionPaidCount;
+      
+      // ADD THIS: Mengestimasi potensi yang belum dibayar berdasarkan rata-rata harga sesi tersebut
+      const avgSessionFee = sessionPaidCount > 0 ? sessionCollected / sessionPaidCount : 0;
+      totalOutstandingRevenueAmount += (sessionOutstanding * avgSessionFee);
+
       return { session, students: sessionStudents, collected: sessionPaidCount, outstanding: sessionOutstanding, revenue: sessionCollected };
   });
+
+  // ADD THIS: Membulatkan angka akhir untuk menghindari nilai desimal
+  totalOutstandingRevenueAmount = Math.round(totalOutstandingRevenueAmount);
 
   const upcomingCalendar = db.calendar
       .filter(c => c.date >= today)
@@ -1153,12 +1164,13 @@ const AdminDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
 
       {/* Total Revenue Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
-         <Card className="bg-gradient-to-br from-emerald-500/10 to-[#151B26] border-emerald-500/20 hover:-translate-y-1 transition-transform cursor-pointer p-5 sm:p-6" onClick={() => setActiveTab('payments')}>
+         {/* REPLACE THIS SECTION: Kartu pertama diubah menjadi Outstanding Revenue */}
+         <Card className="bg-gradient-to-br from-amber-500/10 to-[#151B26] border-amber-500/20 hover:-translate-y-1 transition-transform cursor-pointer p-5 sm:p-6" onClick={() => setActiveTab('payments')}>
            <div className="flex items-center gap-4">
-              <div className="p-3 sm:p-4 bg-emerald-500/20 rounded-xl"><DollarSign size={24} className="text-emerald-400"/></div>
+              <div className="p-3 sm:p-4 bg-amber-500/20 rounded-xl"><DollarSign size={24} className="text-amber-400"/></div>
               <div>
-                 <p className="text-xs sm:text-sm text-gray-400 font-medium">Total Revenue</p>
-                 <h3 className="text-xl sm:text-2xl font-bold text-white">Rp {totalRevenueAmount.toLocaleString()}</h3>
+                 <p className="text-xs sm:text-sm text-gray-400 font-medium">Outstanding Revenue</p>
+                 <h3 className="text-xl sm:text-2xl font-bold text-white">Rp {totalOutstandingRevenueAmount.toLocaleString()}</h3>
               </div>
            </div>
          </Card>
