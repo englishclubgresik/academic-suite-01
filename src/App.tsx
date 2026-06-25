@@ -1288,7 +1288,10 @@ const TutorDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
   const activeStudents = db.students.filter(s => s.status === 'Active');
   const myStudents = activeStudents.filter(s => getSessionGroup(s.class) === mySession).length;
 
-  const myClassesToday = db.calendar.filter(c => c.date === today && c.tutor === user.name);
+  // Helper for Co-Teaching: Memisahkan string "Tutor A & Tutor B" untuk mencocokkan nama
+  const isMyClass = (tutorString, myName) => tutorString && tutorString.split(' & ').includes(myName);
+
+  const myClassesToday = db.calendar.filter(c => c.date === today && isMyClass(c.tutor, user.name));
   const todayClassesCount = myClassesToday.length;
 
   const hasCheckedIn = db.tutorAttendance.some(a => a.tutorId === user.id && a.date === today && a.status === 'Present');
@@ -1305,7 +1308,7 @@ const TutorDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
   const assessmentsDone = db.assessments.filter(a => a.month === currentMonth && a.year === currentYear && a.sessionGroup === mySession).length;
   const assessmentsPending = Math.max(0, myStudents - assessmentsDone);
 
-  const classesCompletedMonth = db.calendar.filter(c => c.tutor === user.name && c.date.startsWith(monthPrefix) && c.date <= today).length;
+  const classesCompletedMonth = db.calendar.filter(c => isMyClass(c.tutor, user.name) && c.date.startsWith(monthPrefix) && c.date <= today).length;
   // REPLACE THIS SECTION: Mengubah pengali durasi kelas menjadi 1 jam
   const teachingHours = classesCompletedMonth * 1;
 
@@ -2994,11 +2997,12 @@ function CalendarModule({ db, setDb, generateId, showToast, user, softDelete }) 
   const [formData, setFormData] = useState({ sessionGroup: SESSIONS[0], date: '', startTime: '', endTime: '', tutor: '' });
   const [isEditingId, setIsEditingId] = useState(null);
 
-  // Auto-fill tutor based on selected session
+  // Auto-fill tutor based on selected session (Updated for Co-Teaching)
   useEffect(() => {
     if (formData.sessionGroup) {
-      const assignedTutor = db.tutors.find(t => t.teachingSession === formData.sessionGroup && t.status === 'Active');
-      setFormData(prev => ({ ...prev, tutor: assignedTutor ? assignedTutor.name : 'No Tutor Assigned' }));
+      const assignedTutors = db.tutors.filter(t => t.teachingSession === formData.sessionGroup && t.status === 'Active');
+      const tutorNames = assignedTutors.length > 0 ? assignedTutors.map(t => t.name).join(' & ') : 'No Tutor Assigned';
+      setFormData(prev => ({ ...prev, tutor: tutorNames }));
     }
   }, [formData.sessionGroup, db.tutors]);
 
