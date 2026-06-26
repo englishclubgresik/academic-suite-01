@@ -419,64 +419,6 @@ const generateDummyDatabase = () => {
     materials: [],
   };
 
-  const names = [
-    'Budi Santoso', 'Siti Aminah', 'Rudi Hermawan', 'Dewi Lestari', 'Andi Saputra',
-    'Ayu Wandira', 'Joko Widodo', 'Mega Pertiwi', 'Dian Sastro', 'Putra Pratama',
-    'Rina Nose', 'Eko Patrio', 'Sari Roti', 'Agus Yudhoyono', 'Nina Zatulini',
-  ];
-
-  for (let i = 1; i <= 10; i++) {
-    db.tutors.push({
-      id: `TUT-2026-${String(i).padStart(3, '0')}`,
-      name: `Tutor ${names[i % names.length]}`,
-      username: `tutor${i}`,
-      password: 'password',
-      teachingSession: SESSIONS[i % SESSIONS.length],
-      status: 'Active',
-    });
-  }
-
-  let studentCounter = 1;
-  LEVELS.forEach((level) => {
-    CLASS_MAPPING[level].forEach((cls) => {
-      for (let i = 0; i < 5; i++) {
-        db.students.push({
-          id: `STU-2026-${String(studentCounter++).padStart(3, '0')}`,
-          name: `${names[studentCounter % names.length]} ${cls}`,
-          gender: i % 2 === 0 ? 'Male' : 'Female',
-          level,
-          class: cls,
-          status: 'Active',
-          teacherComment: '',
-        });
-      }
-    });
-  });
-
-  const today = new Date();
-  for (let i = 0; i < 10; i++) {
-    db.announcements.push({
-      id: `ANN-${i}`,
-      title: `Information Update ${i + 1}`,
-      content:
-        'Please check your schedule for the upcoming assessment week. Ensure all journals are submitted on time for review.\n\nThank you for your continuous support.\nBest Regards,\nAdmin',
-      date: new Date(today.getTime() - i * 86400000).toISOString().split('T')[0],
-      author: 'Admin ECG',
-    });
-  }
-  for (let i = 0; i < 20; i++) {
-    const eventDate = new Date(today.getTime() + (i - 5) * 86400000).toISOString().split('T')[0];
-    const assignedTutor = db.tutors[i % db.tutors.length];
-    db.calendar.push({
-      id: `CAL-${i}`,
-      sessionGroup: assignedTutor.teachingSession,
-      date: eventDate,
-      startTime: '15:00',
-      endTime: '16:30',
-      tutor: assignedTutor.name,
-    });
-  }
-
   return db;
 };
 
@@ -670,7 +612,7 @@ function LoginScreen({ onLogin, isDbLoaded = true }) {
   );
 }
 
-  const KPICard = ({ title, value, subtext, icon: Icon, colorClass, onClick }: any) => (
+const KPICard = ({ title, value, subtext, icon: Icon, colorClass, onClick }: any) => (
     <Card onClick={onClick} className="cursor-pointer hover:-translate-y-1 transition-transform border-t-4 border-t-[#00D4FF]">
       <div className="flex items-start justify-between">
         <div>
@@ -1506,6 +1448,9 @@ export default function App() {
   const [isCloudConnected, setIsCloudConnected] = useState(true);
   const prevCloudState = useRef(true);
 
+  // PERBAIKAN: Ref untuk mencegah data lokal menimpa data cloud saat aplikasi pertama kali dimuat
+  const skipCloudSave = useRef(true);
+
   // Set browser tab title
   useEffect(() => {
     document.title = "ECG Academic Suite";
@@ -1518,14 +1463,19 @@ export default function App() {
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
-          // PERBAIKAN: Jangan buat ulang DB dummy jika students kosong. Gunakan validasi users.
-          if (!parsed.users || !Array.isArray(parsed.users))
+          if (!parsed.users || !Array.isArray(parsed.users)) {
+            skipCloudSave.current = true;
             setDb(generateDummyDatabase());
-          else setDb(parsed);
+          } else {
+            skipCloudSave.current = true;
+            setDb(parsed);
+          }
         } catch (e) {
+          skipCloudSave.current = true;
           setDb(generateDummyDatabase());
         }
       } else {
+        skipCloudSave.current = true;
         setDb(generateDummyDatabase());
       }
       
@@ -1537,8 +1487,8 @@ export default function App() {
         if (GOOGLE_APPS_SCRIPT_URL) {
           const response = await fetch(GOOGLE_APPS_SCRIPT_URL);
           const data = await response.json();
-          // PERBAIKAN: Validasi sinkronisasi cloud menggunakan users, bukan students
           if (data && data.users && Array.isArray(data.users)) {
+            skipCloudSave.current = true; // Jangan tembak balik ke cloud
             setDb(data);
             localStorage.setItem('ecg_db', JSON.stringify(data));
             setIsCloudConnected(true);
@@ -1553,20 +1503,28 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // PERBAIKAN: Simpan perubahan ke local dan cloud asalkan struktur DB valid (ada users),
-    // bahkan jika students atau data lainnya 0. Dibungkus dengan isDbLoaded agar tidak menimpa data awal.
     if (isDbLoaded && db && Array.isArray(db.users)) {
+      // Selalu simpan ke local storage
       localStorage.setItem('ecg_db', JSON.stringify(db));
+      
+      // Jika ini adalah proses muat data awal, JANGAN tembak ke Cloud agar tidak menimpa data server
+      if (skipCloudSave.current) {
+         skipCloudSave.current = false;
+         return;
+      }
+
       if (GOOGLE_APPS_SCRIPT_URL) {
         fetch(GOOGLE_APPS_SCRIPT_URL, {
           method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'text/plain' },
+          headers: {
+            'Content-Type': 'text/plain;charset=utf-8',
+          },
           body: JSON.stringify({ action: 'sync', payload: db }),
         })
+        .then(res => res.json())
         .then(() => setIsCloudConnected(true))
         .catch((e) => {
-           console.warn('GAS Sync failed', e);
+           console.warn('Cloud Sync failed', e);
            setIsCloudConnected(false);
         });
       }
@@ -1756,7 +1714,7 @@ export default function App() {
       });
     } catch (err) {
        console.error(err);
-       showToast('Failed to prepare image for sharing.', 'error');
+           showToast('Failed to prepare image for sharing.', 'error');
     }
   };
 
@@ -4414,26 +4372,62 @@ function RecycleBinModule({ db, setDb, showToast, requestConfirm }) {
   );
 }
 
+const getLinkPreview = (url) => {
+   if(!url) return { type: 'none', src: null };
+   try {
+       // Cek apakah ini link YouTube
+       const ytRegExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+       const ytMatch = url.match(ytRegExp);
+       if (ytMatch && ytMatch[2].length === 11) {
+          return { type: 'youtube', src: `https://img.youtube.com/vi/${ytMatch[2]}/hqdefault.jpg` };
+       }
+       // Jika bukan YouTube, gunakan thum.io untuk auto-screenshot website
+       return { type: 'website', src: `https://image.thum.io/get/width/600/crop/600/noanimate/${url}` };
+   } catch(e) {
+       return { type: 'none', src: null };
+   }
+};
+
 function MaterialsModule({ db, setDb, generateId, showToast, softDelete, user }) {
   const [formData, setFormData] = useState({ title: '', sessionGroup: SESSIONS[0], link: '', notes: '' });
   const [isAdding, setIsAdding] = useState(false);
+  const [isEditingId, setIsEditingId] = useState(null);
+  const [replyTexts, setReplyTexts] = useState({});
 
   const handleSave = (e) => {
     e.preventDefault();
     if (!formData.link) return showToast('Link cannot be empty', 'error');
     
-    const newMat = {
-      id: generateId('MAT', 'materials'),
-      ...formData,
-      tutorId: user.id,
-      tutorName: user.name,
-      date: getTodayDateLocal(),
-      submissions: []
-    };
-    setDb(p => ({ ...p, materials: [...(p.materials || []), newMat] }));
-    showToast('Material posted successfully');
+    if (isEditingId) {
+       setDb(p => ({
+          ...p,
+          materials: p.materials.map(m => m.id === isEditingId ? { ...m, ...formData } : m)
+       }));
+       showToast('Material updated successfully');
+    } else {
+       const newMat = {
+         id: generateId('MAT', 'materials'),
+         ...formData,
+         tutorId: user.id,
+         tutorName: user.name,
+         date: getTodayDateLocal(),
+         submissions: []
+       };
+       setDb(p => ({ ...p, materials: [...(p.materials || []), newMat] }));
+       showToast('Material posted successfully');
+    }
+    
     setIsAdding(false);
+    setIsEditingId(null);
     setFormData({ title: '', sessionGroup: SESSIONS[0], link: '', notes: '' });
+  };
+
+  const editMaterial = (mat) => {
+     setFormData({ title: mat.title, sessionGroup: mat.sessionGroup, link: mat.link, notes: mat.notes });
+     setIsEditingId(mat.id);
+     setIsAdding(true);
+     const contentEl = document.querySelector('main'); 
+     setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50);
   };
 
   const toggleCheck = (matId, subIdx) => {
@@ -4447,17 +4441,39 @@ function MaterialsModule({ db, setDb, generateId, showToast, softDelete, user })
     });
   };
 
+  const handleReply = (matId, subIdx) => {
+     const text = replyTexts[`${matId}-${subIdx}`]?.trim();
+     if (!text) return;
+     setDb(p => {
+        const newMats = [...(p.materials || [])];
+        const matIdx = newMats.findIndex(m => m.id === matId);
+        if (matIdx > -1) {
+           const sub = newMats[matIdx].submissions[subIdx];
+           sub.replies = [...(sub.replies || []), {
+               senderRole: 'tutor',
+               senderName: user.name,
+               text,
+               date: new Date().toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })
+           }];
+           sub.checked = true; // Auto-check saat tutor mereply
+        }
+        return { ...p, materials: newMats };
+     });
+     setReplyTexts(prev => ({ ...prev, [`${matId}-${subIdx}`]: '' }));
+  };
+
   const myMats = (db.materials || []).filter(m => user.role === 'admin' ? true : m.sessionGroup === user.teachingSession).reverse();
 
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-white">Materials & Tasks</h2>
-        <Button onClick={() => setIsAdding(!isAdding)} icon={Plus}>Add Material</Button>
+        <Button onClick={() => { setIsAdding(!isAdding); setIsEditingId(null); setFormData({ title: '', sessionGroup: SESSIONS[0], link: '', notes: '' }); }} icon={Plus}>Add Material</Button>
       </div>
 
       {isAdding && (
         <Card>
+          <h3 className="text-lg font-bold text-white mb-4">{isEditingId ? 'Edit Material' : 'Publish Material'}</h3>
           <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input label="Material Title" value={formData.title} onChange={v => setFormData({...formData, title: v})} required />
             <Input label="Session Group" type="select" options={SESSIONS} value={formData.sessionGroup} onChange={v => setFormData({...formData, sessionGroup: v})} required />
@@ -4469,57 +4485,122 @@ function MaterialsModule({ db, setDb, generateId, showToast, softDelete, user })
               <textarea className="w-full bg-[#0B0F19] border border-gray-700 rounded-lg p-3 text-white h-24 focus:border-[#00D4FF]" value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})} required placeholder="e.g. Watch this video and write 3 sentences." />
             </div>
             <div className="md:col-span-2 flex justify-center gap-2">
-              <Button variant="ghost" onClick={() => setIsAdding(false)}>Cancel</Button>
-              <Button type="submit">Publish Material</Button>
+              <Button variant="ghost" onClick={() => { setIsAdding(false); setIsEditingId(null); }}>Cancel</Button>
+              <Button type="submit">{isEditingId ? 'Save Changes' : 'Publish Material'}</Button>
             </div>
           </form>
         </Card>
       )}
 
       <div className="space-y-4">
-        {myMats.map(mat => (
-          <Card key={mat.id} className="border-t-4 border-t-[#00D4FF] p-0 overflow-hidden">
-            <div className="p-5 border-b border-gray-800 bg-[#151B26] flex justify-between items-start">
-               <div>
-                  <h3 className="text-lg font-bold text-white mb-1">{mat.title}</h3>
-                  <div className="flex items-center gap-3 text-sm text-gray-400">
-                     <span className="text-[#00D4FF] font-medium">{mat.sessionGroup}</span>
-                     <span>•</span>
-                     <span>{mat.date} by {mat.tutorName}</span>
+        {myMats.map(mat => {
+          const preview = getLinkPreview(mat.link);
+          return (
+            <Card key={mat.id} className="p-0 overflow-hidden border border-gray-800 shadow-xl">
+               <div className="flex flex-col md:flex-row border-b border-gray-800 bg-[#151B26]">
+                  <div className="w-full md:w-64 h-48 md:h-auto bg-black flex-shrink-0 relative group">
+                     {preview.type === 'youtube' ? (
+                        <>
+                           <img src={preview.src} alt="Thumbnail" className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+                           <a href={mat.link} target="_blank" rel="noopener noreferrer" className="absolute inset-0 flex items-center justify-center">
+                              <div className="w-12 h-12 bg-red-600 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(220,38,38,0.5)] group-hover:scale-110 transition-transform">
+                                 <div className="w-0 h-0 border-t-8 border-b-8 border-l-[14px] border-transparent border-l-white ml-1"></div>
+                              </div>
+                           </a>
+                        </>
+                     ) : preview.type === 'website' ? (
+                        <>
+                           <img src={preview.src} alt="Website Thumbnail" onError={(e) => { e.currentTarget.style.display = 'none'; }} className="w-full h-full object-cover opacity-60 group-hover:opacity-90 transition-opacity object-top" />
+                           <a href={mat.link} target="_blank" rel="noopener noreferrer" className="absolute inset-0 flex flex-col items-center justify-center bg-black/30 group-hover:bg-black/10 transition-colors">
+                               <div className="bg-[#00D4FF] text-[#0B0F19] px-4 py-2 rounded-xl font-bold flex items-center gap-2 shadow-[0_0_15px_rgba(0,212,255,0.4)] group-hover:scale-105 transition-transform">
+                                  <LinkIcon size={16} /> Open Link
+                               </div>
+                           </a>
+                        </>
+                     ) : (
+                        <a href={mat.link} target="_blank" rel="noopener noreferrer" className="w-full h-full flex flex-col items-center justify-center text-blue-400 hover:text-blue-300 hover:bg-blue-900/20 transition-colors gap-3 py-10">
+                           <LinkIcon size={40} />
+                           <span className="text-sm font-semibold">Open External Link</span>
+                        </a>
+                     )}
+                  </div>
+                  
+                  <div className="p-5 flex-1 flex flex-col">
+                     <div className="flex justify-between items-start mb-4 border-b border-gray-800/50 pb-3">
+                         <div>
+                             <h3 className="text-xl font-bold text-white mb-1 leading-tight">{mat.title}</h3>
+                             <div className="flex items-center gap-3 text-sm text-gray-400">
+                                <span className="text-[#00D4FF] font-medium">{mat.sessionGroup}</span>
+                                <span>•</span>
+                                <span>{mat.date} by {mat.tutorName}</span>
+                             </div>
+                         </div>
+                         <div className="flex gap-2">
+                             <button onClick={() => editMaterial(mat)} className="text-blue-400 p-2 hover:bg-blue-500/10 rounded-lg transition-colors" title="Edit Material"><Edit2 size={18} /></button>
+                             <button onClick={() => softDelete('materials', mat.id, 'Material')} className="text-red-400 p-2 hover:bg-red-500/10 rounded-lg transition-colors" title="Delete Material"><Trash2 size={18} /></button>
+                         </div>
+                     </div>
+                     <p className="text-gray-300 text-sm whitespace-pre-wrap leading-relaxed">{mat.notes}</p>
                   </div>
                </div>
-               <button onClick={() => softDelete('materials', mat.id, 'Material')} className="text-red-400 hover:text-red-300 p-2"><Trash2 size={18} /></button>
-            </div>
-            <div className="p-5 bg-[#0B0F19]">
-               <a href={mat.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-blue-400 hover:text-blue-300 bg-blue-500/10 px-4 py-2 rounded-lg mb-4 text-sm font-medium transition-colors">
-                  <LinkIcon size={16} /> Open Link
-               </a>
-               <p className="text-gray-300 text-sm whitespace-pre-wrap leading-relaxed mb-6 bg-[#151B26] p-4 rounded-lg border border-gray-800">{mat.notes}</p>
-               
-               <div className="mt-4">
-                  <h4 className="text-sm font-bold text-white mb-3 flex items-center gap-2"><MessageCircle size={16} className="text-purple-400"/> Student Submissions ({(mat.submissions || []).length})</h4>
-                  <div className="space-y-3">
+
+               <div className="p-5 bg-[#0B0F19]">
+                  <h4 className="text-sm font-bold text-white mb-3 flex items-center gap-2"><MessageCircle size={16} className="text-[#00D4FF]" /> Student Submissions ({(mat.submissions || []).length})</h4>
+                  <div className="space-y-4">
                      {(mat.submissions || []).map((sub, idx) => (
-                        <div key={idx} className={`p-4 rounded-xl border flex justify-between items-start gap-4 transition-colors ${sub.checked ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-[#1A2234] border-gray-700'}`}>
-                           <div className="flex-1">
-                              <p className="font-bold text-white text-sm mb-1">{sub.studentName} <span className="text-xs text-gray-500 font-normal ml-2">{sub.date}</span></p>
-                              <p className="text-gray-300 text-sm">{sub.text}</p>
+                        <div key={idx} className={`rounded-xl border flex flex-col overflow-hidden transition-colors ${sub.checked ? 'border-emerald-500/30' : 'border-gray-700'}`}>
+                           
+                           <div className={`p-3 flex justify-between items-center ${sub.checked ? 'bg-emerald-500/10' : 'bg-[#1A2234]'}`}>
+                              <p className="font-bold text-white text-sm">
+                                {sub.studentName} <span className="text-xs text-gray-500 font-normal ml-2">{sub.date}</span>
+                              </p>
+                              <button 
+                                onClick={() => toggleCheck(mat.id, idx)} 
+                                className={`p-1.5 rounded-lg transition-colors flex-shrink-0 shadow-sm ${sub.checked ? 'bg-emerald-500 text-white shadow-emerald-500/20' : 'bg-gray-700 text-gray-400 hover:text-white hover:bg-gray-600'}`}
+                                title={sub.checked ? 'Mark as Unchecked' : 'Mark as Checked'}
+                              >
+                                 <Check size={14} />
+                              </button>
                            </div>
-                           <button 
-                             onClick={() => toggleCheck(mat.id, idx)} 
-                             className={`p-2 rounded-lg transition-colors flex-shrink-0 ${sub.checked ? 'bg-emerald-500 text-white' : 'bg-gray-700 text-gray-400 hover:text-white hover:bg-gray-600'}`}
-                             title={sub.checked ? 'Mark as Unchecked' : 'Mark as Checked'}
-                           >
-                              <Check size={16} />
-                           </button>
+                           
+                           <div className="p-4 space-y-3 bg-[#0B0F19]">
+                              <div className="flex flex-col items-start">
+                                 <div className="bg-[#151B26] border border-gray-800 p-3 rounded-lg rounded-tl-none inline-block max-w-[85%]">
+                                    <span className="text-xs font-bold text-blue-400 block mb-1">{sub.studentName}</span>
+                                    <p className="text-sm text-gray-300 whitespace-pre-wrap">{sub.text}</p>
+                                 </div>
+                              </div>
+                              {(sub.replies || []).map((r, i) => (
+                                 <div key={i} className={`flex flex-col ${r.senderRole === 'tutor' ? 'items-end' : 'items-start'}`}>
+                                    <div className={`p-3 rounded-lg inline-block max-w-[85%] ${r.senderRole === 'tutor' ? 'bg-[#00D4FF]/10 border border-[#00D4FF]/20 rounded-tr-none' : 'bg-[#151B26] border border-gray-800 rounded-tl-none'}`}>
+                                       <span className={`text-[10px] font-bold block mb-1 ${r.senderRole === 'tutor' ? 'text-[#00D4FF] text-right' : 'text-blue-400'}`}>
+                                         {r.senderRole === 'tutor' ? 'Me' : r.senderName} <span className="text-gray-500 font-normal ml-1">{r.date}</span>
+                                       </span>
+                                       <p className="text-sm text-gray-300 whitespace-pre-wrap">{r.text}</p>
+                                    </div>
+                                 </div>
+                              ))}
+                           </div>
+                           
+                           <div className="p-3 bg-[#151B26] border-t border-gray-800 flex gap-2">
+                              <input 
+                                 type="text" 
+                                 className="flex-1 bg-[#0B0F19] border border-gray-700 rounded-lg px-4 py-2 text-white text-sm focus:border-[#00D4FF] focus:outline-none"
+                                 placeholder="Write a feedback or reply..."
+                                 value={replyTexts[`${mat.id}-${idx}`] || ''}
+                                 onChange={e => setReplyTexts(p => ({...p, [`${mat.id}-${idx}`]: e.target.value}))}
+                                 onKeyDown={e => { if (e.key === 'Enter') handleReply(mat.id, idx); }}
+                              />
+                              <Button onClick={() => handleReply(mat.id, idx)} className="px-4 text-sm" icon={MessageSquare}>Reply</Button>
+                           </div>
                         </div>
                      ))}
-                     {(mat.submissions || []).length === 0 && <p className="text-xs text-gray-500 italic">No submissions yet.</p>}
+                     {(mat.submissions || []).length === 0 && <p className="text-xs text-gray-500 italic px-2">No submissions yet.</p>}
                   </div>
                </div>
-            </div>
-          </Card>
-        ))}
+            </Card>
+          );
+        })}
         {myMats.length === 0 && <div className="p-8 text-center text-gray-500 bg-[#151B26] rounded-xl border border-gray-800">No materials posted yet.</div>}
       </div>
     </div>
@@ -4533,27 +4614,35 @@ function StudentMaterialsModule({ db, setDb, user, showToast }) {
   const myGroup = student ? getSessionGroup(student.class) : '';
   const myMats = (db.materials || []).filter(m => m.sessionGroup === myGroup).reverse();
 
-  const getYoutubeThumbnail = (url) => {
-     if(!url) return null;
-     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
-     const match = url.match(regExp);
-     return (match && match[2].length === 11) ? `https://img.youtube.com/vi/${match[2]}/hqdefault.jpg` : null;
-  };
-
-  const handleSubmitComment = (matId) => {
-    if (!comment[matId]?.trim()) return showToast('Please write your comment or submission first', 'warning');
+  const handleSubmitComment = (matId, existingSubIdx = -1) => {
+    const text = comment[matId]?.trim();
+    if (!text) return showToast('Please write your comment or submission first', 'warning');
     
     setDb(p => {
       const newMats = [...(p.materials || [])];
       const matIdx = newMats.findIndex(m => m.id === matId);
       if (matIdx > -1) {
-        newMats[matIdx].submissions = [...(newMats[matIdx].submissions || []), {
-          studentId: student.id,
-          studentName: student.name,
-          text: comment[matId],
-          date: new Date().toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' }),
-          checked: false
-        }];
+        if (existingSubIdx > -1) {
+           // Append reply
+           const sub = newMats[matIdx].submissions[existingSubIdx];
+           sub.replies = [...(sub.replies || []), {
+               senderRole: 'student',
+               senderName: student?.name || 'Student',
+               text,
+               date: new Date().toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })
+           }];
+           sub.checked = false; // Mark as unread/unchecked for tutor
+        } else {
+           // Initial Submission
+           newMats[matIdx].submissions = [...(newMats[matIdx].submissions || []), {
+             studentId: student?.id,
+             studentName: student?.name || 'Student',
+             text,
+             date: new Date().toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' }),
+             checked: false,
+             replies: []
+           }];
+        }
       }
       return { ...p, materials: newMats };
     });
@@ -4571,20 +4660,30 @@ function StudentMaterialsModule({ db, setDb, user, showToast }) {
 
       <div className="space-y-6">
         {myMats.map(mat => {
-          const ytThumb = getYoutubeThumbnail(mat.link);
-          const mySubmissions = (mat.submissions || []).filter(s => s.studentId === student.id);
+          const preview = getLinkPreview(mat.link);
+          const mySubIdx = (mat.submissions || []).findIndex(s => s.studentId === student?.id);
+          const mySub = mySubIdx > -1 ? mat.submissions[mySubIdx] : null;
           
           return (
             <Card key={mat.id} className="p-0 overflow-hidden border border-gray-800 shadow-xl">
                <div className="flex flex-col md:flex-row border-b border-gray-800 bg-[#151B26]">
                   <div className="w-full md:w-64 h-48 md:h-auto bg-black flex-shrink-0 relative group">
-                     {ytThumb ? (
+                     {preview.type === 'youtube' ? (
                         <>
-                           <img src={ytThumb} alt="Thumbnail" className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+                           <img src={preview.src} alt="Thumbnail" className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
                            <a href={mat.link} target="_blank" rel="noopener noreferrer" className="absolute inset-0 flex items-center justify-center">
                               <div className="w-12 h-12 bg-red-600 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(220,38,38,0.5)] group-hover:scale-110 transition-transform">
                                  <div className="w-0 h-0 border-t-8 border-b-8 border-l-[14px] border-transparent border-l-white ml-1"></div>
                               </div>
+                           </a>
+                        </>
+                     ) : preview.type === 'website' ? (
+                        <>
+                           <img src={preview.src} alt="Website Thumbnail" onError={(e) => { e.currentTarget.style.display = 'none'; }} className="w-full h-full object-cover opacity-60 group-hover:opacity-90 transition-opacity object-top" />
+                           <a href={mat.link} target="_blank" rel="noopener noreferrer" className="absolute inset-0 flex flex-col items-center justify-center bg-black/30 group-hover:bg-black/10 transition-colors">
+                               <div className="bg-[#00D4FF] text-[#0B0F19] px-4 py-2 rounded-xl font-bold flex items-center gap-2 shadow-[0_0_15px_rgba(0,212,255,0.4)] group-hover:scale-105 transition-transform">
+                                  <LinkIcon size={16} /> Open Link
+                               </div>
                            </a>
                         </>
                      ) : (
@@ -4605,33 +4704,65 @@ function StudentMaterialsModule({ db, setDb, user, showToast }) {
                </div>
 
                <div className="p-5 bg-[#0B0F19]">
-                  <h4 className="text-sm font-bold text-white mb-3 flex items-center gap-2"><MessageCircle size={16} className="text-[#00D4FF]" /> Task Submission / Comment</h4>
+                  <h4 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+                     <MessageCircle size={16} className="text-[#00D4FF]" /> 
+                     {mySub ? 'Task Submission & Feedback' : 'Submit Your Task'}
+                  </h4>
                   
-                  {mySubmissions.length > 0 && (
-                     <div className="mb-4 space-y-2">
-                        {mySubmissions.map((sub, idx) => (
-                           <div key={idx} className="bg-[#151B26] p-3 rounded-lg border border-gray-800 flex justify-between items-start">
-                              <div>
-                                 <p className="text-gray-300 text-sm">{sub.text}</p>
-                                 <p className="text-[10px] text-gray-500 mt-1">{sub.date}</p>
+                  {mySub ? (
+                     <div className="border border-gray-800 rounded-xl overflow-hidden bg-[#151B26]">
+                        <div className="p-3 bg-[#1A2234] border-b border-gray-800 flex justify-between items-center">
+                           <span className="text-xs font-bold text-white">Conversation Thread</span>
+                           {mySub.checked ? (
+                              <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded-full font-bold flex items-center gap-1 shadow-sm"><Check size={12}/> Checked by Tutor</span>
+                           ) : (
+                              <span className="text-[10px] bg-amber-500/20 text-amber-400 px-2 py-1 rounded-full font-bold">Pending Review</span>
+                           )}
+                        </div>
+                        <div className="p-4 space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar">
+                           <div className="flex flex-col items-end">
+                              <div className="bg-[#00D4FF]/10 border border-[#00D4FF]/20 p-3 rounded-lg rounded-tr-none inline-block max-w-[85%]">
+                                 <span className="text-[10px] font-bold text-[#00D4FF] block mb-1 text-right">Me <span className="text-gray-500 font-normal ml-1">{mySub.date}</span></span>
+                                 <p className="text-sm text-gray-200 whitespace-pre-wrap">{mySub.text}</p>
                               </div>
-                              {sub.checked && <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded-full font-bold flex items-center gap-1"><Check size={12}/> Checked by Tutor</span>}
                            </div>
-                        ))}
+                           {(mySub.replies || []).map((r, i) => (
+                              <div key={i} className={`flex flex-col ${r.senderRole === 'student' ? 'items-end' : 'items-start'}`}>
+                                 <div className={`p-3 rounded-lg inline-block max-w-[85%] ${r.senderRole === 'student' ? 'bg-[#00D4FF]/10 border border-[#00D4FF]/20 rounded-tr-none' : 'bg-[#1A2234] border border-gray-700 rounded-tl-none'}`}>
+                                    <span className={`text-[10px] font-bold block mb-1 ${r.senderRole === 'student' ? 'text-[#00D4FF] text-right' : 'text-purple-400'}`}>
+                                       {r.senderRole === 'student' ? 'Me' : r.senderName} <span className="text-gray-500 font-normal ml-1">{r.date}</span>
+                                    </span>
+                                    <p className="text-sm text-gray-200 whitespace-pre-wrap">{r.text}</p>
+                                 </div>
+                              </div>
+                           ))}
+                        </div>
+                        
+                        <div className="p-3 bg-[#0B0F19] border-t border-gray-800 flex gap-2">
+                           <input 
+                              type="text" 
+                              value={comment[mat.id] || ''} 
+                              onChange={e => setComment(p => ({...p, [mat.id]: e.target.value}))}
+                              placeholder="Reply to tutor..."
+                              className="flex-1 bg-[#151B26] border border-gray-700 rounded-lg px-4 py-2 text-white text-sm focus:outline-none focus:border-[#00D4FF]"
+                              onKeyDown={e => { if (e.key === 'Enter') handleSubmitComment(mat.id, mySubIdx); }}
+                           />
+                           <Button onClick={() => handleSubmitComment(mat.id, mySubIdx)} className="px-4 text-sm" icon={MessageSquare}>Reply</Button>
+                        </div>
+                     </div>
+                  ) : (
+                     <div className="flex gap-3 mt-2">
+                        <input 
+                           type="text" 
+                           value={comment[mat.id] || ''} 
+                           onChange={e => setComment(p => ({...p, [mat.id]: e.target.value}))}
+                           placeholder="Write your answer or task here..."
+                           className="flex-1 bg-[#151B26] border border-gray-700 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-[#00D4FF]"
+                           onKeyDown={e => { if (e.key === 'Enter') handleSubmitComment(mat.id, -1); }}
+                        />
+                        <Button onClick={() => handleSubmitComment(mat.id, -1)} className="px-6 shadow-md">Submit Task</Button>
                      </div>
                   )}
-
-                  <div className="flex gap-3 mt-2">
-                     <input 
-                        type="text" 
-                        value={comment[mat.id] || ''} 
-                        onChange={e => setComment(p => ({...p, [mat.id]: e.target.value}))}
-                        placeholder="Write your answer or comment here..."
-                        className="flex-1 bg-[#151B26] border border-gray-700 rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:border-[#00D4FF]"
-                        onKeyDown={e => { if (e.key === 'Enter') handleSubmitComment(mat.id); }}
-                     />
-                     <Button onClick={() => handleSubmitComment(mat.id)} className="px-6 shadow-md">Submit</Button>
-                  </div>
                </div>
             </Card>
           );
