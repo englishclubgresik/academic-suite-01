@@ -1582,37 +1582,41 @@ export default function App() {
   };
 
   const generateId = (prefix, collection) => {
-    const currentYear = new Date().getFullYear();
-    let maxCount = 0;
-
-    const checkId = (idStr) => {
-      if (idStr && idStr.startsWith(`${prefix}-${currentYear}-`)) {
-        const numStr = idStr.split('-')[2];
-        if (numStr) {
-           const num = parseInt(numStr, 10);
-           if (!isNaN(num) && num > maxCount) maxCount = num;
-        }
+    const generateRandomPart = () => {
+      // 4 digit angka acak (1000-9999)
+      const digits = Math.floor(1000 + Math.random() * 9000).toString();
+      
+      // 4 huruf kapital acak (A-Z)
+      let letters = '';
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      for (let i = 0; i < 4; i++) {
+        letters += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
       }
+      
+      return `${digits}-${letters}`;
     };
 
-    // Cari angka terbesar dari koleksi yang aktif
-    (db[collection] || []).forEach((item) => checkId(item.id));
-    
-    // Cari angka terbesar dari recycle bin agar tidak memakai ulang ID yang sudah dihapus
-    (db.recycleBin || []).forEach((binItem) => {
-      if (binItem.originalCollection === collection && binItem.data) {
-         checkId(binItem.data.id);
+    let newId;
+    let isUnique = false;
+
+    // Loop pencegah collision: Memastikan ID benar-benar unik di seluruh database
+    while (!isUnique) {
+      newId = `${prefix}-${generateRandomPart()}`;
+      
+      // Periksa apakah ID sudah terpakai di koleksi data aktif
+      const existsInDb = (db[collection] || []).some(item => item.id === newId);
+      
+      // Periksa apakah ID sudah terpakai di Recycle Bin (mencegah duplikasi data yang sudah dihapus)
+      const existsInBin = (db.recycleBin || []).some(
+        binItem => binItem.originalCollection === collection && binItem.data?.id === newId
+      );
+
+      if (!existsInDb && !existsInBin) {
+        isUnique = true;
       }
-    });
+    }
 
-    const nextNum = (maxCount + 1).toString().padStart(3, '0');
-    
-    // PERBAIKAN KRITIS: Tambahkan 4 karakter acak (hash) di akhir ID
-    // Contoh output: STU-2026-001-A4X9
-    // Menjamin keamanan data 100% agar tidak tumpang tindih meskipun data lama dihapus permanen
-    const uniqueSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
-
-    return `${prefix}-${currentYear}-${nextNum}-${uniqueSuffix}`;
+    return newId;
   };
 
   // LOGIN HANDLER: sekarang bisa login sebagai admin, tutor, maupun siswa (Student)
