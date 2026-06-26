@@ -76,7 +76,7 @@ const COLORS = {
 };
 
 const GOOGLE_APPS_SCRIPT_URL =
-  'https://script.google.com/macros/s/AKfycbw1OiJpEMcjKPGm_s88gzYzWP3qTna6AY0p7F9e7KaM5iQ77g24G6b9DVjls0uy668Y/exec';
+  'https://script.google.com/macros/s/AKfycbyWb5EGOFzLJQwsAmwWvOLXQiUS2IemmL9IlYMMBkDYufhhFNhmsrcfpTmbTrHHD0Mi/exec';
 const LOGO_URL =
   'https://englishclub.my.id/wp-content/uploads/2026/05/cropped-English-Club-Gresik-Reborn-1080-x-1350-px-2.png';
 
@@ -1485,7 +1485,8 @@ export default function App() {
       // 3. AMBIL DATA CLOUD DI LATAR BELAKANG SECARA DIAM-DIAM
       try {
         if (GOOGLE_APPS_SCRIPT_URL) {
-          const response = await fetch(GOOGLE_APPS_SCRIPT_URL);
+          // PERBAIKAN: Tambahkan parameter timestamp (?t=...) agar browser HP tidak menggunakan cache lama
+          const response = await fetch(`${GOOGLE_APPS_SCRIPT_URL}?t=${new Date().getTime()}`);
           const data = await response.json();
           if (data && data.users && Array.isArray(data.users)) {
             skipCloudSave.current = true; // Jangan tembak balik ke cloud
@@ -1514,15 +1515,25 @@ export default function App() {
       }
 
       if (GOOGLE_APPS_SCRIPT_URL) {
+        // PERBAIKAN KRITIS: Hapus mode 'no-cors' karena menyebabkan body (payload JSON) 
+        // terbuang oleh browser saat Google Apps Script melakukan HTTP 302 Redirect.
+        // Tambahkan redirect: 'follow' agar aliran data diproses utuh.
         fetch(GOOGLE_APPS_SCRIPT_URL, {
           method: 'POST',
+          redirect: 'follow', 
           headers: {
             'Content-Type': 'text/plain;charset=utf-8',
           },
           body: JSON.stringify({ action: 'sync', payload: db }),
         })
-        .then(res => res.json())
-        .then(() => setIsCloudConnected(true))
+        .then(async (res) => {
+           if (!res.ok) throw new Error('HTTP Status ' + res.status);
+           return res.text(); // Membaca balasan dari server GAS untuk memastikan benar-benar sukses
+        })
+        .then((text) => {
+           console.log('Cloud Sync Success:', text);
+           setIsCloudConnected(true);
+        })
         .catch((e) => {
            console.warn('Cloud Sync failed', e);
            setIsCloudConnected(false);
