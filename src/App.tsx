@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Toaster, toast as sonnerToast } from 'sonner';
+import { supabase } from './supabaseClient';
 import {
   Users,
   UserCheck,
@@ -1458,18 +1459,13 @@ export default function App() {
 
   useEffect(() => {
     const loadData = async () => {
-      // 1. MUAT DATA LOKAL LEBIH DULU AGAR INSTAN
+      // 1. Load local cache first for instant startup
       const saved = localStorage.getItem('ecg_db');
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
-          if (!parsed.users || !Array.isArray(parsed.users)) {
-            skipCloudSave.current = true;
-            setDb(generateDummyDatabase());
-          } else {
-            skipCloudSave.current = true;
-            setDb(parsed);
-          }
+          skipCloudSave.current = true;
+          setDb(parsed.users && Array.isArray(parsed.users) ? parsed : generateDummyDatabase());
         } catch (e) {
           skipCloudSave.current = true;
           setDb(generateDummyDatabase());
@@ -1478,25 +1474,26 @@ export default function App() {
         skipCloudSave.current = true;
         setDb(generateDummyDatabase());
       }
-      
-      // 2. LANGSUNG AKTIFKAN APLIKASI & TOMBOL LOGIN (Tanpa Menunggu Cloud)
+
+      // 2. Enable app immediately without waiting for cloud
       setIsDbLoaded(true);
 
-      // 3. AMBIL DATA CLOUD DI LATAR BELAKANG SECARA DIAM-DIAM
+      // 3. Fetch latest data from Supabase in background
       try {
-        if (GOOGLE_APPS_SCRIPT_URL) {
-          // PERBAIKAN: Tambahkan parameter timestamp (?t=...) agar browser HP tidak menggunakan cache lama
-          const response = await fetch(`${GOOGLE_APPS_SCRIPT_URL}?t=${new Date().getTime()}`);
-          const data = await response.json();
-          if (data && data.users && Array.isArray(data.users)) {
-            skipCloudSave.current = true; // Jangan tembak balik ke cloud
-            setDb(data);
-            localStorage.setItem('ecg_db', JSON.stringify(data));
-            setIsCloudConnected(true);
-          }
+        const { data, error } = await supabase
+          .from('app_data')
+          .select('data')
+          .eq('id', 'main')
+          .single();
+
+        if (!error && data?.data?.users && Array.isArray(data.data.users)) {
+          skipCloudSave.current = true;
+          setDb(data.data);
+          localStorage.setItem('ecg_db', JSON.stringify(data.data));
+          setIsCloudConnected(true);
         }
       } catch (e) {
-        console.warn('Koneksi cloud gagal, menggunakan Local Storage', e);
+        console.warn('Supabase load failed, using local storage', e);
         setIsCloudConnected(false);
       }
     };
@@ -1505,40 +1502,27 @@ export default function App() {
 
   useEffect(() => {
     if (isDbLoaded && db && Array.isArray(db.users)) {
-      // Selalu simpan ke local storage
+      // Always save to local storage
       localStorage.setItem('ecg_db', JSON.stringify(db));
-      
-      // Jika ini adalah proses muat data awal, JANGAN tembak ke Cloud agar tidak menimpa data server
+
+      // Skip cloud save on initial data load to avoid overwriting server data
       if (skipCloudSave.current) {
-         skipCloudSave.current = false;
-         return;
+        skipCloudSave.current = false;
+        return;
       }
 
-      if (GOOGLE_APPS_SCRIPT_URL) {
-        // PERBAIKAN KRITIS: Hapus mode 'no-cors' karena menyebabkan body (payload JSON) 
-        // terbuang oleh browser saat Google Apps Script melakukan HTTP 302 Redirect.
-        // Tambahkan redirect: 'follow' agar aliran data diproses utuh.
-        fetch(GOOGLE_APPS_SCRIPT_URL, {
-          method: 'POST',
-          redirect: 'follow', 
-          headers: {
-            'Content-Type': 'text/plain;charset=utf-8',
-          },
-          body: JSON.stringify({ action: 'sync', payload: db }),
-        })
-        .then(async (res) => {
-           if (!res.ok) throw new Error('HTTP Status ' + res.status);
-           return res.text(); // Membaca balasan dari server GAS untuk memastikan benar-benar sukses
-        })
-        .then((text) => {
-           console.log('Cloud Sync Success:', text);
-           setIsCloudConnected(true);
-        })
-        .catch((e) => {
-           console.warn('Cloud Sync failed', e);
-           setIsCloudConnected(false);
+      // Sync to Supabase
+      supabase
+        .from('app_data')
+        .upsert({ id: 'main', data: db, updated_at: new Date().toISOString() })
+        .then(({ error }) => {
+          if (error) {
+            console.warn('Supabase sync failed', error);
+            setIsCloudConnected(false);
+          } else {
+            setIsCloudConnected(true);
+          }
         });
-      }
     }
   }, [db, isDbLoaded]);
 
