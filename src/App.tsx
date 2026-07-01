@@ -4177,6 +4177,11 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
   };
 
   const handleDeleteUser = (id, role, name) => {
+    const targetUser = db.users.find(u => u.id === id);
+    if (targetUser && targetUser.username === 'admin') {
+      showToast('Primary Super Admin cannot be deleted.', 'error');
+      return;
+    }
     if (id === 'ADM-001' || id === 'ADM-FALLBACK') {
       showToast('Primary Super Admin cannot be deleted.', 'error');
       return;
@@ -4243,19 +4248,22 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
             <tr><th className="p-4 text-center">Role</th><th className="p-4 text-center">Name</th><th className="p-4 text-center">Username</th><th className="p-4 text-center">Password</th><th className="p-4 text-center">Status</th><th className="p-4 text-center">Actions</th></tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {db.users.filter(u => u.role === 'admin').map((u, idx) => (
-              <tr key={`admin-${u.id}-${idx}`} className="hover:bg-[#0B0F19]">
-                <td className="p-4 text-center text-xs font-bold uppercase text-red-400">Admin</td>
-                <td className="p-4 text-center text-white">{u.name}</td><td className="p-4 text-center">{u.username}</td><td className="p-4 text-center text-gray-500">****</td><td className="p-4 text-center"><Badge status={u.active} /></td>
-                <td className="p-4 text-center flex justify-center gap-2">
-                  <button onClick={() => { setFormData({ ...u }); setIsEditingId(u.id); const contentEl = document.querySelector('main'); setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50); }} className="text-blue-400 p-1" title="Edit Profile"><Edit2 size={16} /></button>
-                  <button onClick={() => { setResetDialog({ id: u.id, role: u.role, name: u.name }); }} className="text-yellow-500 p-1" title="Reset Password"><KeyRound size={16} /></button>
-                  {u.id !== 'ADM-001' && u.id !== 'ADM-FALLBACK' && (
-                    <button onClick={() => handleDeleteUser(u.id, u.role, u.name)} className="text-red-500 p-1" title="Delete User"><Trash2 size={16} /></button>
-                  )}
-                </td>
-              </tr>
-            ))}
+            {db.users.filter(u => u.role === 'admin').map((u, idx) => {
+              const isSuperAdmin = u.username === 'admin';
+              return (
+                <tr key={`admin-${u.id}-${idx}`} className="hover:bg-[#0B0F19]">
+                  <td className={`p-4 text-center text-xs font-bold uppercase ${isSuperAdmin ? 'text-red-400' : 'text-[#00D4FF]'}`}>{isSuperAdmin ? 'Super Admin' : 'Admin'}</td>
+                  <td className="p-4 text-center text-white">{u.name}</td><td className="p-4 text-center">{u.username}</td><td className="p-4 text-center text-gray-500">****</td><td className="p-4 text-center"><Badge status={u.active} /></td>
+                  <td className="p-4 text-center flex justify-center gap-2">
+                    <button onClick={() => { setFormData({ ...u }); setIsEditingId(u.id); const contentEl = document.querySelector('main'); setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50); }} className="text-blue-400 p-1" title="Edit Profile"><Edit2 size={16} /></button>
+                    <button onClick={() => { setResetDialog({ id: u.id, role: u.role, name: u.name }); }} className="text-yellow-500 p-1" title="Reset Password"><KeyRound size={16} /></button>
+                    {!isSuperAdmin && (
+                      <button onClick={() => handleDeleteUser(u.id, u.role, u.name)} className="text-red-500 p-1" title="Delete User"><Trash2 size={16} /></button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
             {db.tutors.map((t, idx) => (
               <tr key={`tutor-${t.id}-${idx}`} className="hover:bg-[#0B0F19]">
                 <td className="p-4 text-center text-xs font-bold uppercase text-purple-400">Tutor</td>
