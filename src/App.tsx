@@ -57,6 +57,18 @@ import {
   Check
 } from 'lucide-react';
 
+// Menyiapkan mock database client lokal
+const createClient = (url, key) => ({
+  from: (table) => ({
+    select: (cols) => ({
+      eq: (col, val) => ({
+        single: () => Promise.resolve({ data: null, error: { code: 'MOCKED' } })
+      })
+    }),
+    upsert: (data) => Promise.resolve({ error: null })
+  })
+});
+
 declare global {
   interface Window {
     html2canvas?: (element: HTMLElement, options?: any) => Promise<HTMLCanvasElement>;
@@ -75,8 +87,10 @@ const COLORS = {
   warning: '#F59E0B',
 };
 
-const GOOGLE_APPS_SCRIPT_URL =
-  'https://script.google.com/macros/s/AKfycbyWb5EGOFzLJQwsAmwWvOLXQiUS2IemmL9IlYMMBkDYufhhFNhmsrcfpTmbTrHHD0Mi/exec';
+const SUPABASE_URL = 'https://mrmegixpwemwbqlnhcci.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1ybWVnaXhwd2Vtd2JxbG5oY2NpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxOTYzNDgsImV4cCI6MjA5Nzc3MjM0OH0.a4PxM5gS1xuLGmWDh41HU-1rYeSgSNRya-RPPgRgE3E';
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
 const LOGO_URL =
   'https://englishclub.my.id/wp-content/uploads/2026/05/cropped-English-Club-Gresik-Reborn-1080-x-1350-px-2.png';
 
@@ -1501,21 +1515,25 @@ export default function App() {
 
       // 3. AMBIL DATA CLOUD DI LATAR BELAKANG SECARA DIAM-DIAM
       try {
-        if (GOOGLE_APPS_SCRIPT_URL) {
-          // PERBAIKAN: Tambahkan parameter timestamp (?t=...) agar browser HP tidak menggunakan cache lama
-          const response = await fetch(`${GOOGLE_APPS_SCRIPT_URL}?t=${new Date().getTime()}`);
-          const data = await response.json();
-          if (data && data.users && Array.isArray(data.users)) {
-            skipCloudSave.current = true; // Jangan tembak balik ke cloud
-            // PERBAIKAN: Merge dengan defaultDbStructure mencegah crash jika ada tabel yg gagal di-load
-            const mergedData = { ...defaultDbStructure, ...data };
-            setDb(mergedData);
-            localStorage.setItem('ecg_db', JSON.stringify(mergedData));
-            setIsCloudConnected(true);
-          }
+        const { data, error } = await supabase
+          .from('app_state')
+          .select('state_data')
+          .eq('id', 'main_db')
+          .single();
+          
+        if (data && data.state_data && Array.isArray(data.state_data.users)) {
+          skipCloudSave.current = true; // Jangan tembak balik ke cloud
+          const mergedData = { ...defaultDbStructure, ...data.state_data };
+          setDb(mergedData);
+          localStorage.setItem('ecg_db', JSON.stringify(mergedData));
+          setIsCloudConnected(true);
+        } else if (error && error.code !== 'PGRST116') {
+           // Error selain "No rows found"
+           console.warn('Supabase fetch error:', error);
+           setIsCloudConnected(false);
         }
       } catch (e) {
-        console.warn('Koneksi cloud gagal, menggunakan Local Storage', e);
+        console.warn('Koneksi Supabase gagal, menggunakan Local Storage', e);
         setIsCloudConnected(false);
       }
     };
@@ -1533,31 +1551,21 @@ export default function App() {
          return;
       }
 
-      if (GOOGLE_APPS_SCRIPT_URL) {
-        // PERBAIKAN KRITIS: Hapus mode 'no-cors' karena menyebabkan body (payload JSON) 
-        // terbuang oleh browser saat Google Apps Script melakukan HTTP 302 Redirect.
-        // Tambahkan redirect: 'follow' agar aliran data diproses utuh.
-        fetch(GOOGLE_APPS_SCRIPT_URL, {
-          method: 'POST',
-          redirect: 'follow', 
-          headers: {
-            'Content-Type': 'text/plain;charset=utf-8',
-          },
-          body: JSON.stringify({ action: 'sync', payload: db }),
-        })
-        .then(async (res) => {
-           if (!res.ok) throw new Error('HTTP Status ' + res.status);
-           return res.text(); // Membaca balasan dari server GAS untuk memastikan benar-benar sukses
-        })
-        .then((text) => {
-           console.log('Cloud Sync Success:', text);
-           setIsCloudConnected(true);
-        })
-        .catch((e) => {
-           console.warn('Cloud Sync failed', e);
-           setIsCloudConnected(false);
-        });
-      }
+      // Sinkronisasi ke Supabase
+      supabase.from('app_state').upsert({
+          id: 'main_db',
+          state_data: db,
+          updated_at: new Date().toISOString()
+      })
+      .then(({ error }) => {
+         if (error) throw error;
+         console.log('Supabase Sync Success');
+         setIsCloudConnected(true);
+      })
+      .catch((e) => {
+         console.warn('Supabase Sync failed', e);
+         setIsCloudConnected(false);
+      });
     }
   }, [db, isDbLoaded]);
 
@@ -4178,11 +4186,8 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
 
   const handleDeleteUser = (id, role, name) => {
     const targetUser = db.users.find(u => u.id === id);
-    if (targetUser && targetUser.username === 'admin') {
-      showToast('Primary Super Admin cannot be deleted.', 'error');
-      return;
-    }
-    if (id === 'ADM-001' || id === 'ADM-FALLBACK') {
+    
+    if (targetUser && targetUser.role === 'admin' && targetUser.username.toLowerCase() === 'admin') {
       showToast('Primary Super Admin cannot be deleted.', 'error');
       return;
     }
@@ -4249,10 +4254,12 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
           </thead>
           <tbody className="divide-y divide-gray-800">
             {db.users.filter(u => u.role === 'admin').map((u, idx) => {
-              const isSuperAdmin = u.username === 'admin';
+              const isSuperAdmin = u.username.toLowerCase() === 'admin';
               return (
                 <tr key={`admin-${u.id}-${idx}`} className="hover:bg-[#0B0F19]">
-                  <td className={`p-4 text-center text-xs font-bold uppercase ${isSuperAdmin ? 'text-red-400' : 'text-[#00D4FF]'}`}>{isSuperAdmin ? 'Super Admin' : 'Admin'}</td>
+                  <td className={`p-4 text-center text-xs font-bold uppercase ${isSuperAdmin ? 'text-red-500' : 'text-blue-400'}`}>
+                    {isSuperAdmin ? 'Super Admin' : 'Admin'}
+                  </td>
                   <td className="p-4 text-center text-white">{u.name}</td><td className="p-4 text-center">{u.username}</td><td className="p-4 text-center text-gray-500">****</td><td className="p-4 text-center"><Badge status={u.active} /></td>
                   <td className="p-4 text-center flex justify-center gap-2">
                     <button onClick={() => { setFormData({ ...u }); setIsEditingId(u.id); const contentEl = document.querySelector('main'); setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50); }} className="text-blue-400 p-1" title="Edit Profile"><Edit2 size={16} /></button>
