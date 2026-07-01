@@ -57,17 +57,11 @@ import {
   Check
 } from 'lucide-react';
 
-// Menyiapkan mock database client lokal
-const createClient = (url, key) => ({
-  from: (table) => ({
-    select: (cols) => ({
-      eq: (col, val) => ({
-        single: () => Promise.resolve({ data: null, error: { code: 'MOCKED' } })
-      })
-    }),
-    upsert: (data) => Promise.resolve({ error: null })
-  })
-});
+// Link Eksekusi Google App Script Anda
+const APPSCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyWb5EGOFzLJQwsAmwWvOLXQiUS2IemmL9IlYMMBkDYufhhFNhmsrcfpTmbTrHHD0Mi/exec';
+
+// KREDENSIAL API KEY NEXUS PRIME ENGINE
+const API_KEY = 'ecg_secure_key_2026';
 
 declare global {
   interface Window {
@@ -86,10 +80,6 @@ const COLORS = {
   success: '#10B981',
   warning: '#F59E0B',
 };
-
-const SUPABASE_URL = 'https://mrmegixpwemwbqlnhcci.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1ybWVnaXhwd2Vtd2JxbG5oY2NpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxOTYzNDgsImV4cCI6MjA5Nzc3MjM0OH0.a4PxM5gS1xuLGmWDh41HU-1rYeSgSNRya-RPPgRgE3E';
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const LOGO_URL =
   'https://englishclub.my.id/wp-content/uploads/2026/05/cropped-English-Club-Gresik-Reborn-1080-x-1350-px-2.png';
@@ -1481,12 +1471,46 @@ export default function App() {
   // PERBAIKAN: Ref untuk mencegah data lokal menimpa data cloud saat aplikasi pertama kali dimuat
   const skipCloudSave = useRef(true);
 
+  // NEW: Ref untuk melacak versi database (Version Control & Anti-Conflict)
+  const dbVersion = useRef(null);
+
+  // Diangkat ke atas agar bisa digunakan di dalam useEffect sinkronisasi
+  const showToast = (msg, type = 'success') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
   // Set browser tab title
   useEffect(() => {
     document.title = "ECG Academic Suite";
   }, []);
 
   useEffect(() => {
+    // Fungsi untuk menormalisasi data lama/eksternal yang menggunakan key bahasa Indonesia
+    const normalizeData = (data) => {
+       const norm = { ...defaultDbStructure, ...data };
+       if (norm.users && Array.isArray(norm.users)) {
+          norm.users = norm.users.map(u => {
+             let r = u.role ? String(u.role).toLowerCase() : 'student';
+             if (r === 'siswa') r = 'student';
+             if (r === 'guru' || r === 'pengajar') r = 'tutor';
+             
+             return {
+                ...u,
+                name: u.name || u.nama || 'Unknown',
+                role: r,
+                // Jika tidak ada username, generate dari nama
+                username: u.username || (u.nama ? String(u.nama).toLowerCase().replace(/[^a-z0-9]/g, '') : `user_${Math.floor(Math.random()*10000)}`),
+                // Beri password default ecg123 untuk user yang belum punya password
+                password: u.password || 'ecg123',
+                active: u.active || 'Active',
+                mustChangePassword: u.password ? u.mustChangePassword : true
+             };
+          });
+       }
+       return norm;
+    };
+
     const loadData = async () => {
       // 1. MUAT DATA LOKAL LEBIH DULU AGAR INSTAN
       const saved = localStorage.getItem('ecg_db');
@@ -1498,8 +1522,7 @@ export default function App() {
             setDb(generateDummyDatabase());
           } else {
             skipCloudSave.current = true;
-            // PERBAIKAN: Merge dengan defaultDbStructure agar array yang kosong tetap aman
-            setDb({ ...defaultDbStructure, ...parsed });
+            setDb(normalizeData(parsed));
           }
         } catch (e) {
           skipCloudSave.current = true;
@@ -1513,27 +1536,37 @@ export default function App() {
       // 2. LANGSUNG AKTIFKAN APLIKASI & TOMBOL LOGIN (Tanpa Menunggu Cloud)
       setIsDbLoaded(true);
 
-      // 3. AMBIL DATA CLOUD DI LATAR BELAKANG SECARA DIAM-DIAM
+      // 3. AMBIL DATA CLOUD DI LATAR BELAKANG SECARA DIAM-DIAM MELALUI APP SCRIPT
       try {
-        const { data, error } = await supabase
-          .from('app_state')
-          .select('state_data')
-          .eq('id', 'main_db')
-          .single();
+        const res = await fetch(APPSCRIPT_URL);
+        if (!res.ok) throw new Error('Gagal memuat dari AppScript');
+        
+        const data = await res.json();
+        
+        if (data && data.status === 'error') {
+           throw new Error(data.message || 'Internal Server Error dari AppScript');
+        }
+
+        const cloudDb = data.payload || data.state_data || data; 
           
-        if (data && data.state_data && Array.isArray(data.state_data.users)) {
-          skipCloudSave.current = true; // Jangan tembak balik ke cloud
-          const mergedData = { ...defaultDbStructure, ...data.state_data };
+        // NEW: Ambil _dbVersion dari Cloud dan hapus dari payload data untuk mencegah tercampur
+        if (cloudDb && cloudDb._dbVersion) {
+           dbVersion.current = cloudDb._dbVersion;
+           delete cloudDb._dbVersion;
+        }
+
+        if (cloudDb && Array.isArray(cloudDb.users)) {
+          skipCloudSave.current = true;
+          const mergedData = normalizeData(cloudDb);
           setDb(mergedData);
           localStorage.setItem('ecg_db', JSON.stringify(mergedData));
           setIsCloudConnected(true);
-        } else if (error && error.code !== 'PGRST116') {
-           // Error selain "No rows found"
-           console.warn('Supabase fetch error:', error);
+        } else {
+           console.warn('Format data dari AppScript kosong atau tidak valid', data);
            setIsCloudConnected(false);
         }
       } catch (e) {
-        console.warn('Koneksi Supabase gagal, menggunakan Local Storage', e);
+        console.warn('Koneksi AppScript gagal, menggunakan Local Storage', e);
         setIsCloudConnected(false);
       }
     };
@@ -1551,28 +1584,48 @@ export default function App() {
          return;
       }
 
-      // Sinkronisasi ke Supabase
-      supabase.from('app_state').upsert({
-          id: 'main_db',
-          state_data: db,
-          updated_at: new Date().toISOString()
+      // Sinkronisasi ke Google App Script (Dilengkapi API Key & DB Version)
+      fetch(APPSCRIPT_URL, {
+        method: 'POST',
+        // WAJIB: Gunakan text/plain untuk menghindari pemblokiran CORS Preflight (OPTIONS)
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8',
+        },
+        // Membungkus data sesuai struktur baru NEXUS PRIME ENGINE
+        body: JSON.stringify({ 
+          action: 'sync', 
+          apiKey: API_KEY,
+          version: dbVersion.current,
+          payload: db 
+        })
       })
-      .then(({ error }) => {
-         if (error) throw error;
-         console.log('Supabase Sync Success');
-         setIsCloudConnected(true);
+      .then(res => {
+         if (!res.ok) throw new Error('Response AppScript gagal');
+         return res.json().catch(() => ({})); 
+      })
+      .then((data) => {
+         if (data.status === 'success') {
+             console.log('AppScript Sync Success:', data.message);
+             // Perbarui versi lokal dengan versi terbaru dari server jika ada
+             if (data.newVersion) dbVersion.current = data.newVersion;
+             setIsCloudConnected(true);
+         } else if (data.status === 'conflict') {
+             console.error('DATABASE CONFLICT:', data.message);
+             showToast('Database was updated by another user! Refresh the page to avoid data loss.', 'error');
+             setIsCloudConnected(false); // Putuskan indikator cloud agar user tahu ada isu sinkronisasi
+         } else if (data.status === 'busy') {
+             console.warn('AppScript Sync Busy - Sistem Backend sedang memproses antrean (Akan sinkron otomatis lagi nanti)');
+             // Jika server sibuk antre (Phantom Queue), biarkan indikator tetap hijau karena aman
+         } else {
+             throw new Error(data.message || 'Error saat sinkronisasi');
+         }
       })
       .catch((e) => {
-         console.warn('Supabase Sync failed', e);
+         console.warn('AppScript Sync failed', e);
          setIsCloudConnected(false);
       });
     }
   }, [db, isDbLoaded]);
-
-  const showToast = (msg, type = 'success') => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 3000);
-  };
 
   // Effect khusus untuk memunculkan notifikasi perubahan status cloud
   useEffect(() => {
@@ -2124,7 +2177,7 @@ function StudentsModule({ db, setDb, generateId, showToast, softDelete, user }) 
   };
 
   const filtered = db.students.filter((s) => {
-    const matchSearch = s.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchSearch = (s.name || '').toLowerCase().includes((searchTerm || '').toLowerCase());
     const matchLevel = filterLevel ? s.level === filterLevel : true;
     const matchSession = user?.role === 'tutor' ? getSessionGroup(s.class) === user.teachingSession : true;
     return matchSearch && matchLevel && matchSession;
@@ -2205,7 +2258,7 @@ function TutorsModule({ db, setDb, generateId, showToast, softDelete }) {
   };
 
   const filtered = db.tutors.filter((t) => {
-    const matchSearch = t.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchSearch = (t.name || '').toLowerCase().includes((searchTerm || '').toLowerCase());
     const matchSession = filterSession ? t.teachingSession === filterSession : true;
     return matchSearch && matchSession;
   });
@@ -3583,13 +3636,13 @@ function HistoryReportsModule({ db, setDb, showToast, handlePrint, user }) {
   const renderDirectory = () => {
     const students = db.students.filter(
       (s) =>
-        s.name.toLowerCase().includes(searchTerm.toLowerCase()) &&
+        (s.name || '').toLowerCase().includes((searchTerm || '').toLowerCase()) &&
         (filterSession ? getSessionGroup(s.class) === filterSession : true) &&
         (user?.role === 'tutor' ? getSessionGroup(s.class) === user.teachingSession : true)
     );
     const tutors = db.tutors.filter(
       (t) =>
-        t.name.toLowerCase().includes(searchTerm.toLowerCase()) &&
+        (t.name || '').toLowerCase().includes((searchTerm || '').toLowerCase()) &&
         (filterSession ? t.teachingSession === filterSession : true)
     );
 
@@ -4187,7 +4240,7 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
   const handleDeleteUser = (id, role, name) => {
     const targetUser = db.users.find(u => u.id === id);
     
-    if (targetUser && targetUser.role === 'admin' && targetUser.username.toLowerCase() === 'admin') {
+    if (targetUser && targetUser.role === 'admin' && (targetUser.username || '').toLowerCase() === 'admin') {
       showToast('Primary Super Admin cannot be deleted.', 'error');
       return;
     }
@@ -4254,7 +4307,7 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
           </thead>
           <tbody className="divide-y divide-gray-800">
             {db.users.filter(u => u.role === 'admin').map((u, idx) => {
-              const isSuperAdmin = u.username.toLowerCase() === 'admin';
+              const isSuperAdmin = (u.username || '').toLowerCase() === 'admin';
               return (
                 <tr key={`admin-${u.id}-${idx}`} className="hover:bg-[#0B0F19]">
                   <td className={`p-4 text-center text-xs font-bold uppercase ${isSuperAdmin ? 'text-red-500' : 'text-blue-400'}`}>
