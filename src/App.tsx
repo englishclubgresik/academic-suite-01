@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Toaster, toast as sonnerToast } from 'sonner';
-import { supabase } from './supabaseClient';
 import {
   Users,
   UserCheck,
@@ -94,7 +93,7 @@ const CLASS_MAPPING = {
   Kindergarten: ['PAUD', 'TK A', 'TK B'],
   'Elementary School': ['Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6'],
   'Junior High School': ['Grade 7', 'Grade 8', 'Grade 9'],
-  'Senior High School': ['Grade 10'],
+  'Senior High School': ['Grade 10', 'Grade 11', 'Grade 12'],
   University: ['University'],
   'Working Professional': ['Professional'],
 };
@@ -127,8 +126,17 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
+const formatDropdownDate = (dateStr) => {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.split('-');
+  const dateObj = new Date(y, m - 1, d);
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  return `${days[dateObj.getDay()]}, ${parseInt(d, 10)} ${MONTHS[parseInt(m, 10)-1]} ${y}`;
+};
+
 const calculateDaysLeft = (targetDate, todayDate) => {
   // PERBAIKAN KRITIS: Parsing string secara eksplisit agar bebas dari pengaruh Timezone Browser
+  if (!targetDate || !todayDate) return '-';
   const [tYear, tMonth, tDay] = targetDate.split('-').map(Number);
   const [dYear, dMonth, dDay] = todayDate.split('-').map(Number);
   
@@ -634,15 +642,19 @@ const DateTimeDisplay = () => {
   const [now, setNow] = useState(new Date());
 
   useEffect(() => {
-    // Sinkronisasi pembaruan agar tepat setiap awal menit
-    const secUntilNextMin = 60 - now.getSeconds();
+    // PERBAIKAN: Menghindari Memory Leak karena interval ganda dengan dependency array kosong []
+    let interval;
+    const secUntilNextMin = 60 - new Date().getSeconds();
     const timeout = setTimeout(() => {
       setNow(new Date());
-      const interval = setInterval(() => setNow(new Date()), 60000);
-      return () => clearInterval(interval);
+      interval = setInterval(() => setNow(new Date()), 60000);
     }, secUntilNextMin * 1000);
-    return () => clearTimeout(timeout);
-  }, [now]);
+    
+    return () => {
+      clearTimeout(timeout);
+      if (interval) clearInterval(interval);
+    };
+  }, []);
 
   const dateOptions: Intl.DateTimeFormatOptions = { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' };
   const timeOptions: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit', hour12: true };
@@ -888,7 +900,10 @@ const StudentDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: a
   const avgScore = latestAss ? latestAss.average : 0;
   const currentGrade = latestAss ? latestAss.grade : '-';
 
-  const upcomingClasses = db.calendar.filter(c => c.date >= today).sort((a,b) => a.date.localeCompare(b.date)).slice(0, 5);
+  const upcomingClasses = db.calendar
+      .filter(c => c.date >= today && (c.sessionGroup || c.name) === mySessionGroup)
+      .sort((a,b) => a.date.localeCompare(b.date))
+      .slice(0, 5);
   const nextClass = upcomingClasses.length > 0 ? upcomingClasses[0] : null;
 
   const scores = latestAss && latestAss.scores ? latestAss.scores : {};
@@ -1095,15 +1110,12 @@ const AdminDashboard = ({ db, user, setActiveTab, today, isCloudConnected }: any
   const totalRevenueAmount = currentMonthPayments.filter(p => p.status === 'Paid').reduce((sum, p) => sum + Number(p.amount), 0);
   const paidInvoicesCount = currentMonthPayments.filter(p => p.status === 'Paid').length;
 
-  // NEW: Calculate meetings this month for Expected Revenue from Calendar PER SESSION
+  // Calculate Expected Revenue globally without hardcoded sessions
   const currentMonthPrefix = `${currentYear}-${currentMonth.padStart(2, '0')}`;
   
-  let expectedRevenueAmount = 0;
-  SESSIONS.forEach(session => {
-      const studentsInSession = db.students.filter(s => (s.status === 'Active' || s.active === 'Active') && getSessionGroup(s.class) === session).length;
-      const meetingsForSession = db.calendar.filter(c => c.date.startsWith(currentMonthPrefix) && (c.sessionGroup === session || c.name === session)).length;
-      expectedRevenueAmount += (studentsInSession * meetingsForSession * 25000);
-  });
+  const activeStudentsCount = db.students.filter(s => s.status === 'Active' || s.active === 'Active').length;
+  const scheduledMeetingsCount = db.calendar.filter(c => c.date.startsWith(currentMonthPrefix)).length;
+  const expectedRevenueAmount = activeStudentsCount * scheduledMeetingsCount * 25000;
   
   const totalOutstandingRevenueAmount = Math.max(0, expectedRevenueAmount - totalRevenueAmount);
 
@@ -1432,10 +1444,13 @@ const Dashboard = ({ db, user, setActiveTab, isCloudConnected }: any) => {
 };
 
 export default function App() {
-  const [db, setDb] = useState({
+  // PERBAIKAN: Buat struktur default untuk memastikan tidak ada array yang 'undefined'
+  const defaultDbStructure = {
     users: [], students: [], tutors: [], studentAttendance: [], tutorAttendance: [],
     journals: [], assessments: [], payments: [], payroll: [], calendar: [], announcements: [], recycleBin: [], materials: []
-  });
+  };
+
+  const [db, setDb] = useState(defaultDbStructure);
 
   const [currentUser, setCurrentUser] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -1459,13 +1474,19 @@ export default function App() {
 
   useEffect(() => {
     const loadData = async () => {
-      // 1. Load local cache first for instant startup
+      // 1. MUAT DATA LOKAL LEBIH DULU AGAR INSTAN
       const saved = localStorage.getItem('ecg_db');
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
-          skipCloudSave.current = true;
-          setDb(parsed.users && Array.isArray(parsed.users) ? parsed : generateDummyDatabase());
+          if (!parsed.users || !Array.isArray(parsed.users)) {
+            skipCloudSave.current = true;
+            setDb(generateDummyDatabase());
+          } else {
+            skipCloudSave.current = true;
+            // PERBAIKAN: Merge dengan defaultDbStructure agar array yang kosong tetap aman
+            setDb({ ...defaultDbStructure, ...parsed });
+          }
         } catch (e) {
           skipCloudSave.current = true;
           setDb(generateDummyDatabase());
@@ -1474,26 +1495,27 @@ export default function App() {
         skipCloudSave.current = true;
         setDb(generateDummyDatabase());
       }
-
-      // 2. Enable app immediately without waiting for cloud
+      
+      // 2. LANGSUNG AKTIFKAN APLIKASI & TOMBOL LOGIN (Tanpa Menunggu Cloud)
       setIsDbLoaded(true);
 
-      // 3. Fetch latest data from Supabase in background
+      // 3. AMBIL DATA CLOUD DI LATAR BELAKANG SECARA DIAM-DIAM
       try {
-        const { data, error } = await supabase
-          .from('app_data')
-          .select('data')
-          .eq('id', 'main')
-          .single();
-
-        if (!error && data?.data?.users && Array.isArray(data.data.users)) {
-          skipCloudSave.current = true;
-          setDb(data.data);
-          localStorage.setItem('ecg_db', JSON.stringify(data.data));
-          setIsCloudConnected(true);
+        if (GOOGLE_APPS_SCRIPT_URL) {
+          // PERBAIKAN: Tambahkan parameter timestamp (?t=...) agar browser HP tidak menggunakan cache lama
+          const response = await fetch(`${GOOGLE_APPS_SCRIPT_URL}?t=${new Date().getTime()}`);
+          const data = await response.json();
+          if (data && data.users && Array.isArray(data.users)) {
+            skipCloudSave.current = true; // Jangan tembak balik ke cloud
+            // PERBAIKAN: Merge dengan defaultDbStructure mencegah crash jika ada tabel yg gagal di-load
+            const mergedData = { ...defaultDbStructure, ...data };
+            setDb(mergedData);
+            localStorage.setItem('ecg_db', JSON.stringify(mergedData));
+            setIsCloudConnected(true);
+          }
         }
       } catch (e) {
-        console.warn('Supabase load failed, using local storage', e);
+        console.warn('Koneksi cloud gagal, menggunakan Local Storage', e);
         setIsCloudConnected(false);
       }
     };
@@ -1502,27 +1524,40 @@ export default function App() {
 
   useEffect(() => {
     if (isDbLoaded && db && Array.isArray(db.users)) {
-      // Always save to local storage
+      // Selalu simpan ke local storage
       localStorage.setItem('ecg_db', JSON.stringify(db));
-
-      // Skip cloud save on initial data load to avoid overwriting server data
+      
+      // Jika ini adalah proses muat data awal, JANGAN tembak ke Cloud agar tidak menimpa data server
       if (skipCloudSave.current) {
-        skipCloudSave.current = false;
-        return;
+         skipCloudSave.current = false;
+         return;
       }
 
-      // Sync to Supabase
-      supabase
-        .from('app_data')
-        .upsert({ id: 'main', data: db, updated_at: new Date().toISOString() })
-        .then(({ error }) => {
-          if (error) {
-            console.warn('Supabase sync failed', error);
-            setIsCloudConnected(false);
-          } else {
-            setIsCloudConnected(true);
-          }
+      if (GOOGLE_APPS_SCRIPT_URL) {
+        // PERBAIKAN KRITIS: Hapus mode 'no-cors' karena menyebabkan body (payload JSON) 
+        // terbuang oleh browser saat Google Apps Script melakukan HTTP 302 Redirect.
+        // Tambahkan redirect: 'follow' agar aliran data diproses utuh.
+        fetch(GOOGLE_APPS_SCRIPT_URL, {
+          method: 'POST',
+          redirect: 'follow', 
+          headers: {
+            'Content-Type': 'text/plain;charset=utf-8',
+          },
+          body: JSON.stringify({ action: 'sync', payload: db }),
+        })
+        .then(async (res) => {
+           if (!res.ok) throw new Error('HTTP Status ' + res.status);
+           return res.text(); // Membaca balasan dari server GAS untuk memastikan benar-benar sukses
+        })
+        .then((text) => {
+           console.log('Cloud Sync Success:', text);
+           setIsCloudConnected(true);
+        })
+        .catch((e) => {
+           console.warn('Cloud Sync failed', e);
+           setIsCloudConnected(false);
         });
+      }
     }
   }, [db, isDbLoaded]);
 
@@ -1619,12 +1654,32 @@ export default function App() {
     const cleanUser = username.trim();
     const cleanPass = password.trim();
 
-    const appUser = db.users.find(
+    let appUser = db.users.find(
       (u) => u.username === cleanUser && u.password === cleanPass && u.active === 'Active'
     );
     const tutor = db.tutors.find(
       (u) => u.username === cleanUser && u.password === cleanPass && u.status === 'Active'
     );
+
+    // FIX: Pastikan admin - password selalu bisa masuk (Super Admin Fallback)
+    // Mencegah Anda terkunci jika data Cloud menimpa akun admin default
+    if (!appUser && !tutor && cleanUser === 'admin' && cleanPass === 'password') {
+      appUser = {
+        id: 'ADM-FALLBACK',
+        username: 'admin',
+        password: 'password',
+        role: 'admin',
+        name: 'Super Admin',
+        active: 'Active',
+      };
+      // Suntikkan kembali ke database lokal jika tidak ada
+      setDb(prev => {
+         if(!prev.users.find(u => u.username === 'admin')) {
+            return { ...prev, users: [appUser, ...prev.users] };
+         }
+         return prev;
+      });
+    }
 
     if (appUser) {
       if (rememberMe) localStorage.setItem('ecg_remembered_user', JSON.stringify({ username: cleanUser, password: cleanPass }));
@@ -1717,6 +1772,77 @@ export default function App() {
     }
   };
 
+  // CALCULATE BADGES FOR TUTOR & STUDENT NOTIFICATIONS
+  const badgeCounts = useMemo(() => {
+    let counts = { 
+      tutor_attendance: 0, journals: 0, assessments: 0, student_attendance: 0, materials: 0,
+      my_payments: 0, my_materials: 0, calendar: 0, announcements: 0
+    };
+    
+    const today = getTodayDateLocal();
+    const dObj = new Date();
+    const currentMonth = String(dObj.getMonth() + 1);
+    const currentYear = String(dObj.getFullYear());
+
+    if (currentUser?.role === 'tutor') {
+      const isMyClass = (tutorString, myName) => tutorString && tutorString.split(' & ').includes(myName);
+      const mySchedulesToday = db.calendar.filter(c => c.date === today && isMyClass(c.tutor, currentUser.name));
+      
+      // 1. Tutor Check-In (Jika ada jadwal kelas hari ini tapi belum check-in)
+      const hasCheckedIn = db.tutorAttendance.some(a => a.tutorId === currentUser.id && a.date === today && a.status === 'Present');
+      counts.tutor_attendance = (!hasCheckedIn && mySchedulesToday.length > 0) ? 1 : 0;
+      
+      // 2. Learning Journals (Kurangi jumlah jadwal dengan jumlah jurnal hari ini)
+      const journalsToday = db.journals.filter(j => j.tutorName === currentUser.name && j.date === today).length;
+      counts.journals = Math.max(0, mySchedulesToday.length - journalsToday);
+      
+      // 3. Student Attendance (Jadwal hari ini yang belum disubmit absensinya)
+      const markedScheduleIdsToday = Array.from(new Set(db.studentAttendance.filter(a => a.date === today).map(a => a.scheduleId)));
+      counts.student_attendance = mySchedulesToday.filter(c => !markedScheduleIdsToday.includes(c.id)).length;
+      
+      // 4. Monthly Assessments (Jumlah murid aktif - jumlah form nilai yang disubmit bulan ini)
+      const activeStudents = db.students.filter(s => s.status === 'Active');
+      const mySession = currentUser.teachingSession;
+      const myStudents = activeStudents.filter(s => getSessionGroup(s.class) === mySession).length;
+      const assessmentsDone = db.assessments.filter(a => a.month === currentMonth && a.year === currentYear && a.sessionGroup === mySession).length;
+      counts.assessments = Math.max(0, myStudents - assessmentsDone);
+      
+      // 5. Materials & Tasks (Menghitung submission / komentar siswa yang belum ditandai checked/read)
+      let pendingMaterialsCount = 0;
+      (db.materials || []).filter(m => m.sessionGroup === currentUser.teachingSession).forEach(mat => {
+         pendingMaterialsCount += (mat.submissions || []).filter(sub => !sub.checked).length;
+      });
+      counts.materials = pendingMaterialsCount;
+
+    } else if (currentUser?.role === 'student') {
+      const studentRec = db.students.find(s => s.id === currentUser.studentId);
+      const mySession = studentRec ? getSessionGroup(studentRec.class) : '';
+
+      // 1. My Payments: Munculkan 1 sebagai PENGINGAT TAGIHAN jika SPP bulan ini belum dibayar
+      const isPaidThisMonth = db.payments.some(p => p.studentId === currentUser.studentId && p.month === currentMonth && p.year === currentYear && p.status === 'Paid');
+      counts.my_payments = isPaidThisMonth ? 0 : 1;
+
+      // 2. My Materials: Jumlah tugas/materi bulan ini yang belum dikerjakan (submit) oleh siswa
+      const monthPrefix = `${currentYear}-${currentMonth.padStart(2, '0')}`;
+      const myMatsThisMonth = (db.materials || []).filter(m => m.sessionGroup === mySession && m.date.startsWith(monthPrefix));
+      const pendingMats = myMatsThisMonth.filter(m => {
+         const mySub = (m.submissions || []).find(s => s.studentId === currentUser.studentId);
+         return !mySub; // Belum ada pengumpulan tugas
+      });
+      counts.my_materials = pendingMats.length;
+
+      // 3. Kalender Akademik: Jumlah jadwal kelas yang harus dihadiri HARI INI
+      const classesToday = db.calendar.filter(c => c.date === today && (c.sessionGroup || c.name) === mySession);
+      counts.calendar = classesToday.length;
+
+      // 4. Announcements: Jumlah pengumuman baru yang dipublish HARI INI
+      const annToday = db.announcements.filter(a => a.date === today);
+      counts.announcements = annToday.length;
+    }
+    
+    return counts;
+  }, [currentUser, db]);
+
   if (!currentUser) return <LoginScreen onLogin={handleLogin} isDbLoaded={isDbLoaded} />;
 
   // FORCE PASSWORD CHANGE JIKA DIMINTA
@@ -1728,11 +1854,11 @@ export default function App() {
   const NAVIGATION = [
     { id: 'dashboard', label: 'Dashboard', icon: Home, roles: ['admin', 'tutor', 'student'] },
     { id: 'announcements', label: 'Announcements', icon: Bell, roles: ['admin', 'student'] },
-    { id: 'calendar', label: 'Academic Calendar', icon: CalendarIcon, roles: ['admin', 'tutor', 'student'] },
     { id: 'students', label: 'Students Directory', icon: Users, roles: ['admin', 'tutor'] },
     { id: 'tutors', label: 'Tutors Directory', icon: Briefcase, roles: ['admin'] },
-    { id: 'student_attendance', label: 'Student Attendance', icon: UserCheck, roles: ['admin', 'tutor'] },
+    { id: 'calendar', label: 'Academic Calendar', icon: CalendarIcon, roles: ['admin', 'tutor', 'student'] },
     { id: 'tutor_attendance', label: 'Tutor Check-In', icon: Activity, roles: ['admin', 'tutor'] },
+    { id: 'student_attendance', label: 'Student Attendance', icon: UserCheck, roles: ['admin', 'tutor'] },
     { id: 'my_attendance', label: 'My Attendance', icon: UserCheck, roles: ['student'] }, // Khusus Student
     { id: 'journals', label: 'Learning Journals', icon: BookOpen, roles: ['admin', 'tutor'] },
     { id: 'my_journals', label: 'My Learning Journal', icon: BookOpen, roles: ['student'] }, // Khusus Student
@@ -1759,7 +1885,7 @@ export default function App() {
       case 'tutors':
         return <TutorsModule db={db} setDb={setDb} generateId={generateId} showToast={showToast} softDelete={softDelete} />;
       case 'student_attendance':
-        return <StudentAttendanceModule db={db} setDb={setDb} showToast={showToast} softDelete={softDelete} />;
+        return <StudentAttendanceModule db={db} setDb={setDb} showToast={showToast} softDelete={softDelete} user={currentUser} generateId={generateId} />;
       case 'tutor_attendance':
         return <TutorAttendanceModule db={db} setDb={setDb} user={currentUser} showToast={showToast} softDelete={softDelete} />;
       case 'my_attendance': // STUDENT: Read Only Attendance
@@ -1769,7 +1895,7 @@ export default function App() {
       case 'my_journals': // STUDENT: Read Only Journal
         return <StudentReadOnlyJournalsModule db={db} user={currentUser} />;
       case 'assessments':
-        return <AssessmentsModule db={db} setDb={setDb} generateId={generateId} showToast={showToast} />;
+        return <AssessmentsModule db={db} setDb={setDb} generateId={generateId} showToast={showToast} user={currentUser} />;
       case 'my_assessments': // STUDENT: Read Only Assessment
         return <StudentReadOnlyAssessmentModule db={db} user={currentUser} />;
       case 'materials': // TUTOR & ADMIN: Manage Materials & Tasks
@@ -1789,12 +1915,12 @@ export default function App() {
             handleShareImage={handleShareImage}
             downloadPNG={downloadPNG}
             softDelete={softDelete}
-          />
-        );
-      case 'my_payments': // STUDENT: Read Only Payments
-        return <StudentReadOnlyPaymentModule db={db} user={currentUser} />;
-      case 'payroll':
-        return (
+        />
+      );
+    case 'my_payments': // STUDENT: Read Only Payments
+      return <StudentReadOnlyPaymentModule db={db} user={currentUser} downloadPNG={downloadPNG} handleShareImage={handleShareImage} />;
+    case 'payroll':
+      return (
           <PayrollModule
             db={db}
             setDb={setDb}
@@ -1812,7 +1938,7 @@ export default function App() {
       case 'announcements':
         return <AnnouncementsModule db={db} setDb={setDb} generateId={generateId} user={currentUser} showToast={showToast} softDelete={softDelete} setActiveTab={setActiveTab} />;
       case 'history':
-        return <HistoryReportsModule db={db} setDb={setDb} showToast={showToast} handlePrint={() => window.print()} />;
+        return <HistoryReportsModule db={db} setDb={setDb} showToast={showToast} handlePrint={() => window.print()} user={currentUser} />;
       case 'settings':
         return <SettingsModule db={db} setDb={setDb} generateId={generateId} user={currentUser} showToast={showToast} requestConfirm={requestConfirm} />;
       case 'account_settings':
@@ -1887,18 +2013,28 @@ export default function App() {
         </div>
 
         <div className="flex-1 overflow-y-auto py-4 px-3 space-y-1 custom-scrollbar">
-          {NAVIGATION.filter((nav) => nav.roles.includes(currentUser.role)).map((nav) => (
-            <button
-              key={nav.id}
-              onClick={() => { setActiveTab(nav.id); if (window.innerWidth < 768) setSidebarOpen(false); }}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-                activeTab === nav.id ? 'bg-[#151B26] text-[#00D4FF] border-l-2 border-[#00D4FF] shadow-[inset_0_0_15px_rgba(0,212,255,0.05)]' : 'text-gray-400 hover:bg-[#151B26] hover:text-white'
-              }`}
-            >
-              <nav.icon size={20} className={activeTab === nav.id ? 'text-[#00D4FF]' : ''} />
-              <span className="font-medium text-sm">{nav.label}</span>
-            </button>
-          ))}
+          {NAVIGATION.filter((nav) => nav.roles.includes(currentUser.role)).map((nav) => {
+            const badge = badgeCounts[nav.id] || 0;
+            return (
+              <button
+                key={nav.id}
+                onClick={() => { setActiveTab(nav.id); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                className={`w-full flex items-center justify-between px-4 py-3 rounded-lg transition-colors ${
+                  activeTab === nav.id ? 'bg-[#151B26] text-[#00D4FF] border-l-2 border-[#00D4FF] shadow-[inset_0_0_15px_rgba(0,212,255,0.05)]' : 'text-gray-400 hover:bg-[#151B26] hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <nav.icon size={20} className={activeTab === nav.id ? 'text-[#00D4FF]' : ''} />
+                  <span className="font-medium text-sm">{nav.label}</span>
+                </div>
+                {badge > 0 && (
+                  <span className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-[0_0_10px_rgba(239,68,68,0.4)] min-w-[20px] text-center">
+                    {badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
         <div className="p-4 border-t border-gray-800 bg-[#0B0F19]">
@@ -1951,7 +2087,16 @@ export default function App() {
 }
 
 function StudentsModule({ db, setDb, generateId, showToast, softDelete, user }) {
-  const [formData, setFormData] = useState({ id: '', name: '', gender: 'Male', level: LEVELS[0], class: CLASS_MAPPING[LEVELS[0]][0], status: 'Active', teacherComment: '' });
+  const availableLevels = useMemo(() => {
+    if (user?.role === 'tutor') {
+       return LEVELS.filter(l => CLASS_MAPPING[l].some(c => getSessionGroup(c) === user.teachingSession));
+    }
+    return LEVELS;
+  }, [user]);
+
+  const defaultLevel = availableLevels[0] || LEVELS[0];
+
+  const [formData, setFormData] = useState({ id: '', name: '', gender: 'Male', level: defaultLevel, class: CLASS_MAPPING[defaultLevel][0], status: 'Active', teacherComment: '' });
   const [isAdding, setIsAdding] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterLevel, setFilterLevel] = useState('');
@@ -1973,7 +2118,8 @@ function StudentsModule({ db, setDb, generateId, showToast, softDelete, user }) 
   const filtered = db.students.filter((s) => {
     const matchSearch = s.name.toLowerCase().includes(searchTerm.toLowerCase());
     const matchLevel = filterLevel ? s.level === filterLevel : true;
-    return matchSearch && matchLevel;
+    const matchSession = user?.role === 'tutor' ? getSessionGroup(s.class) === user.teachingSession : true;
+    return matchSearch && matchLevel && matchSession;
   });
 
   return (
@@ -1981,7 +2127,7 @@ function StudentsModule({ db, setDb, generateId, showToast, softDelete, user }) 
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-white">Students Directory</h2>
         {(!user || user.role === 'admin' || user.role === 'tutor') && (
-          <Button onClick={() => { setFormData({ id: '', name: '', gender: 'Male', level: LEVELS[0], class: CLASS_MAPPING[LEVELS[0]][0], status: 'Active', teacherComment: '' }); setIsAdding(!isAdding); }} icon={Plus}>Add Student</Button>
+          <Button onClick={() => { setFormData({ id: '', name: '', gender: 'Male', level: defaultLevel, class: CLASS_MAPPING[defaultLevel][0], status: 'Active', teacherComment: '' }); setIsAdding(!isAdding); }} icon={Plus}>Add Student</Button>
         )}
       </div>
       {isAdding && (!user || user.role === 'admin' || user.role === 'tutor') && (
@@ -1989,7 +2135,7 @@ function StudentsModule({ db, setDb, generateId, showToast, softDelete, user }) 
           <form onSubmit={handleSave} className="grid grid-cols-2 gap-4">
             <Input label="Name" value={formData.name} onChange={(v) => setFormData({ ...formData, name: v })} required />
             <Input label="Gender" type="select" options={['Male', 'Female']} value={formData.gender} onChange={(v) => setFormData({ ...formData, gender: v })} required />
-            <Input label="Level" type="select" options={LEVELS} value={formData.level} onChange={(v) => setFormData({ ...formData, level: v })} required />
+            <Input label="Level" type="select" options={availableLevels} value={formData.level} onChange={(v) => setFormData({ ...formData, level: v })} required />
             <Input label="Class" type="select" options={CLASS_MAPPING[formData.level] || []} value={formData.class} onChange={(v) => setFormData({ ...formData, class: v })} required />
             <Input label="Status" type="select" options={['Active', 'Inactive']} value={formData.status} onChange={(v) => setFormData({ ...formData, status: v })} />
             <div className="col-span-2 flex justify-center gap-2">
@@ -2004,7 +2150,7 @@ function StudentsModule({ db, setDb, generateId, showToast, softDelete, user }) 
           <input type="text" placeholder="Search students..." className="flex-1 bg-[#151B26] border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-[#00D4FF]" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
           <select className="w-full md:w-64 bg-[#151B26] border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-[#00D4FF]" value={filterLevel} onChange={(e) => setFilterLevel(e.target.value)}>
             <option value="">All Levels</option>
-            {LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
+            {availableLevels.map((l) => <option key={l} value={l}>{l}</option>)}
           </select>
         </div>
         <table className="w-full text-left text-sm">
@@ -2107,16 +2253,56 @@ function TutorsModule({ db, setDb, generateId, showToast, softDelete }) {
   );
 }
 
-function StudentAttendanceModule({ db, setDb, showToast, softDelete }) {
-  const [date, setDate] = useState(getTodayDateLocal());
-  const [sessionGroup, setSessionGroup] = useState(SESSIONS[0]);
+function StudentAttendanceModule({ db, setDb, showToast, softDelete, user, generateId }) {
+  const [selectedScheduleId, setSelectedScheduleId] = useState('');
   const [attendanceData, setAttendanceData] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [editStatus, setEditStatus] = useState('');
+  const [viewDate, setViewDate] = useState(getTodayDateLocal());
+  const [editScheduleIdFilter, setEditScheduleIdFilter] = useState('');
+
+  const markedScheduleIds = useMemo(() => {
+    return Array.from(new Set(db.studentAttendance.map(a => a.scheduleId)));
+  }, [db.studentAttendance]);
+
+  const availableSchedules = useMemo(() => {
+     let scheds = [...(db.calendar || [])].sort((a, b) => b.date.localeCompare(a.date));
+     if (user && user.role === 'tutor') {
+        scheds = scheds.filter(c => c.tutor && c.tutor.split(' & ').includes(user.name));
+     }
+     // HIDE schedules that have already been marked
+     return scheds.filter(c => !markedScheduleIds.includes(c.id));
+  }, [db.calendar, user, markedScheduleIds]);
+
+  const markedSchedules = useMemo(() => {
+     let scheds = [...(db.calendar || [])].sort((a, b) => b.date.localeCompare(a.date));
+     if (user && user.role === 'tutor') {
+        scheds = scheds.filter(c => c.tutor && c.tutor.split(' & ').includes(user.name));
+     }
+     // SHOW ONLY schedules that have already been marked
+     return scheds.filter(c => markedScheduleIds.includes(c.id));
+  }, [db.calendar, user, markedScheduleIds]);
+
+  const selectedSchedule = useMemo(() => {
+     return availableSchedules.find(s => s.id === selectedScheduleId) || null;
+  }, [selectedScheduleId, availableSchedules]);
 
   const activeStudents = useMemo(() => db.students.filter((s) => s.status === 'Active'), [db.students]);
-  const targetStudents = useMemo(() => activeStudents.filter((s) => getSessionGroup(s.class) === sessionGroup), [activeStudents, sessionGroup]);
-  const alreadyMarkedIds = useMemo(() => db.studentAttendance.filter((a) => a.date === date).map((a) => a.studentId), [db.studentAttendance, date]);
+  
+  const targetStudents = useMemo(() => {
+     if (!selectedSchedule) return [];
+     const sGroup = selectedSchedule.sessionGroup || selectedSchedule.name;
+     return activeStudents.filter((s) => getSessionGroup(s.class) === sGroup);
+  }, [activeStudents, selectedSchedule]);
+
+  const alreadyMarkedIds = useMemo(() => {
+     if (!selectedSchedule) return [];
+     const sGroup = selectedSchedule.sessionGroup || selectedSchedule.name;
+     return db.studentAttendance
+        .filter((a) => a.scheduleId === selectedSchedule.id || (a.date === selectedSchedule.date && a.sessionGroup === sGroup))
+        .map((a) => a.studentId);
+  }, [db.studentAttendance, selectedSchedule]);
+
   const studentsToMark = useMemo(() => targetStudents.filter((s) => !alreadyMarkedIds.includes(s.id)), [targetStudents, alreadyMarkedIds]);
 
   useEffect(() => {
@@ -2126,10 +2312,20 @@ function StudentAttendanceModule({ db, setDb, showToast, softDelete }) {
   }, [studentsToMark]);
 
   const handleSave = () => {
-    if (Object.keys(attendanceData).length === 0) return;
+    if (Object.keys(attendanceData).length === 0 || !selectedSchedule) return;
+    const sGroup = selectedSchedule.sessionGroup || selectedSchedule.name;
     const newRecords = Object.entries(attendanceData).map(([studentId, status]) => {
       const student = activeStudents.find((s) => s.id === studentId);
-      return { id: `ATT-${Date.now()}-${Math.floor(Math.random() * 1000)}`, date, sessionGroup, studentId, studentName: student.name, class: student.class, status };
+      return { 
+         id: generateId ? generateId('ATT', 'studentAttendance') : `ATT-${Date.now()}-${Math.floor(Math.random() * 1000)}`, 
+         scheduleId: selectedSchedule.id,
+         date: selectedSchedule.date, 
+         sessionGroup: sGroup, 
+         studentId, 
+         studentName: student.name, 
+         class: student.class, 
+         status 
+      };
     });
     setDb((prev) => ({ ...prev, studentAttendance: [...prev.studentAttendance, ...newRecords] }));
     showToast('Attendance Saved');
@@ -2142,6 +2338,23 @@ function StudentAttendanceModule({ db, setDb, showToast, softDelete }) {
     showToast('Updated');
   };
 
+  const visibleAttendanceRecords = useMemo(() => {
+    let records = db.studentAttendance;
+    if (editScheduleIdFilter) {
+        records = records.filter(a => a.scheduleId === editScheduleIdFilter);
+    } else {
+        records = records.filter((a) => a.date === viewDate);
+        if (user && user.role === 'tutor') {
+          records = records.filter(a => {
+              const sched = db.calendar.find(c => c.id === a.scheduleId);
+              if (sched && sched.tutor && sched.tutor.split(' & ').includes(user.name)) return true;
+              return a.sessionGroup === user.teachingSession;
+          });
+        }
+    }
+    return records;
+  }, [db.studentAttendance, viewDate, user, editScheduleIdFilter, db.calendar]);
+
   const statusColors = {
     Present: 'accent-green-500',
     Sick: 'accent-yellow-500',
@@ -2152,10 +2365,37 @@ function StudentAttendanceModule({ db, setDb, showToast, softDelete }) {
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold text-white">Student Attendance</h2>
-      <Card className="flex gap-4 bg-[#0A0E17]">
-        <Input label="Date" type="date" value={date} onChange={setDate} />
-        <Input label="Session Group" type="select" options={SESSIONS} value={sessionGroup} onChange={setSessionGroup} />
+      
+      <Card className="flex flex-col gap-4 bg-[#0A0E17]">
+        {availableSchedules.length === 0 ? (
+            <div className="w-full p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 font-medium text-sm">
+               No Academic Calendar schedule available. Please create a schedule first.
+            </div>
+        ) : (
+            <div className="w-full flex flex-col gap-3">
+               <Input 
+                  label="Select Schedule" 
+                  type="select" 
+                  options={[
+                    { value: '', label: 'Select a schedule...' },
+                    ...availableSchedules.map(c => ({ value: c.id, label: `${formatDropdownDate(c.date)} - ${c.sessionGroup || c.name} (${c.tutor})` }))
+                  ]} 
+                  value={selectedScheduleId} 
+                  onChange={setSelectedScheduleId} 
+                  className="mb-0"
+               />
+               {selectedSchedule && (
+                   <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-gray-400 bg-[#151B26] p-4 rounded-xl border border-gray-800 shadow-inner">
+                       <p><span className="font-bold text-gray-300">Date:</span> {formatDropdownDate(selectedSchedule.date)}</p>
+                       <p><span className="font-bold text-gray-300">Session:</span> {selectedSchedule.sessionGroup || selectedSchedule.name}</p>
+                       <p><span className="font-bold text-gray-300">Tutor:</span> {selectedSchedule.tutor}</p>
+                       <p><span className="font-bold text-gray-300">Time:</span> {selectedSchedule.startTime} - {selectedSchedule.endTime}</p>
+                   </div>
+               )}
+            </div>
+        )}
       </Card>
+
       <Card className="p-0 overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead className="bg-[#151B26] border-b border-gray-800">
@@ -2168,7 +2408,7 @@ function StudentAttendanceModule({ db, setDb, showToast, softDelete }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {studentsToMark.map((s) => (
+            {studentsToMark.length > 0 ? studentsToMark.map((s) => (
               <tr key={s.id} className="hover:bg-[#0B0F19]">
                 <td className="p-4 text-white font-medium">{s.name} <span className="text-xs text-gray-500">({s.class})</span></td>
                 {['Present', 'Sick', 'Excused', 'Absent'].map((status) => (
@@ -2177,21 +2417,45 @@ function StudentAttendanceModule({ db, setDb, showToast, softDelete }) {
                   </td>
                 ))}
               </tr>
-            ))}
+            )) : (
+              <tr>
+                <td colSpan={5} className="p-8 text-center text-gray-500">
+                  {!selectedSchedule ? "Please select a schedule to mark attendance." : "All active students for this schedule have been marked."}
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
         <div className="p-4 bg-[#0A0E17] flex justify-end border-t border-gray-800">
-          <Button onClick={handleSave} disabled={studentsToMark.length === 0}>Save Attendance</Button>
+          <Button onClick={handleSave} disabled={studentsToMark.length === 0 || !selectedSchedule}>Save Attendance</Button>
         </div>
       </Card>
+      
       <Card>
-        <h3 className="font-semibold text-white mb-4">Edit Today's Records</h3>
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
+          <h3 className="font-semibold text-white">Edit Records</h3>
+          <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+             <select 
+               className="bg-[#151B26] border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:border-[#00D4FF] focus:outline-none w-full sm:w-auto min-w-[200px]"
+               value={editScheduleIdFilter}
+               onChange={e => setEditScheduleIdFilter(e.target.value)}
+             >
+               <option value="">Filter by Past Schedule...</option>
+               {markedSchedules.map(c => (
+                   <option key={c.id} value={c.id}>{c.date} • {c.sessionGroup || c.name}</option>
+               ))}
+             </select>
+             {!editScheduleIdFilter && (
+                <input type="date" className="bg-[#151B26] border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm" value={viewDate} onChange={e => setViewDate(e.target.value)} />
+             )}
+          </div>
+        </div>
         <div className="space-y-2">
-          {db.studentAttendance.filter((a) => a.date === date && a.sessionGroup === sessionGroup).map((r) => (
+          {visibleAttendanceRecords.map((r) => (
             <div key={r.id} className="flex justify-between items-center p-3 bg-[#0B0F19] rounded-lg border border-gray-800">
               <div>
                 <p className="text-white text-sm">{r.studentName}</p>
-                <p className="text-xs text-gray-500">{r.class}</p>
+                <p className="text-xs text-gray-500">{r.class} • {r.sessionGroup}</p>
               </div>
               <div className="flex gap-2 items-center text-center">
                 {editingId === r.id ? (
@@ -2211,6 +2475,9 @@ function StudentAttendanceModule({ db, setDb, showToast, softDelete }) {
               </div>
             </div>
           ))}
+          {visibleAttendanceRecords.length === 0 && (
+             <p className="text-sm text-gray-500 text-center py-4">No attendance records found.</p>
+          )}
         </div>
       </Card>
     </div>
@@ -2298,13 +2565,13 @@ function TutorAttendanceModule({ db, setDb, user, showToast, softDelete }) {
     </div>
   );
 }
-
-function AssessmentsModule({ db, setDb, generateId, showToast }) {
+function AssessmentsModule({ db, setDb, generateId, showToast, user }) {
+  const defaultSession = user?.role === 'tutor' ? user.teachingSession : SESSIONS[0];
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [year, setYear] = useState(new Date().getFullYear());
-  const [sessionGroup, setSessionGroup] = useState(SESSIONS[0]);
+  const [sessionGroup, setSessionGroup] = useState(defaultSession);
   const [tableData, setTableData] = useState({});
-  const [materialFilterSession, setMaterialFilterSession] = useState('All');
+  const [materialFilterSession, setMaterialFilterSession] = useState(user?.role === 'tutor' ? user.teachingSession : 'All');
 
   const activeStudents = useMemo(() => db.students.filter((s) => s.status === 'Active'), [db.students]);
   const targetStudents = useMemo(() => activeStudents.filter((s) => getSessionGroup(s.class) === sessionGroup), [activeStudents, sessionGroup]);
@@ -2397,19 +2664,26 @@ function AssessmentsModule({ db, setDb, generateId, showToast }) {
       <div className="flex flex-col md:flex-row gap-4 items-end bg-[#0A0E17] p-4 rounded-xl border border-gray-800 shadow-sm">
         <Input label="Month" type="select" options={MONTHS.map((m, i) => ({ value: i + 1, label: m }))} value={month} onChange={setMonth} className="mb-0" />
         <Input label="Year" type="number" value={year} onChange={setYear} className="mb-0" />
-        <Input label="Session" type="select" options={SESSIONS} value={sessionGroup} onChange={setSessionGroup} className="mb-0" />
+        <Input label="Session" type="select" options={user?.role === 'tutor' ? [user.teachingSession] : SESSIONS} value={sessionGroup} onChange={setSessionGroup} className="mb-0" disabled={user?.role === 'tutor'} />
       </div>
 
       <div className="bg-[#151B26] border border-gray-800 rounded-xl shadow-sm overflow-hidden mb-6">
         <div className="p-4 border-b border-gray-800 bg-[#0A0E17] flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <h3 className="text-white font-bold text-sm">Learning Materials (From Journals)</h3>
           <select
-            className="bg-[#0B0F19] border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#00D4FF]"
+            className="bg-[#0B0F19] border border-gray-700 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#00D4FF] disabled:opacity-50"
             value={materialFilterSession}
             onChange={e => setMaterialFilterSession(e.target.value)}
+            disabled={user?.role === 'tutor'}
           >
-            <option value="All">All Sessions</option>
-            {SESSIONS.map(s => <option key={s} value={s}>{s}</option>)}
+            {user?.role === 'tutor' ? (
+               <option value={user.teachingSession}>{user.teachingSession}</option>
+            ) : (
+               <>
+                 <option value="All">All Sessions</option>
+                 {SESSIONS.map(s => <option key={s} value={s}>{s}</option>)}
+               </>
+            )}
           </select>
         </div>
         <div className="p-4 max-h-48 overflow-y-auto custom-scrollbar bg-[#0B0F19]">
@@ -2873,61 +3147,223 @@ function PayrollModule({ db, setDb, generateId, showToast, handlePrint, handleSh
 }
 
 function JournalsModule({ db, setDb, user, showToast, generateId, softDelete }) {
-  const [formData, setFormData] = useState({ date: getTodayDateLocal(), sessionGroup: SESSIONS[0], topic: '', activities: '', notes: '', followUp: '' });
+  const [formData, setFormData] = useState({ scheduleId: '', date: '', sessionGroup: '', tutorName: '', topic: '', learningObjectives: '', activities: '', notes: '', homework: '' });
   const [isEditingId, setIsEditingId] = useState(null);
+
+  const availableSchedules = useMemo(() => {
+     let scheds = [...(db.calendar || [])].sort((a, b) => b.date.localeCompare(a.date));
+     if (user.role === 'tutor') {
+        scheds = scheds.filter(c => c.tutor && c.tutor.includes(user.name));
+     }
+     
+     // FILTER: Hanya tampilkan jadwal yang BELUM ada di jurnal, 
+     // KECUALI jadwal yang sedang diedit saat ini.
+     const journaledScheduleIds = db.journals.map(j => j.scheduleId).filter(Boolean);
+     scheds = scheds.filter(c => !journaledScheduleIds.includes(c.id) || (isEditingId && formData.scheduleId === c.id));
+     
+     return scheds;
+  }, [db.calendar, user, db.journals, isEditingId, formData.scheduleId]);
+
+  useEffect(() => {
+    if (formData.scheduleId && !isEditingId) {
+       const sched = availableSchedules.find(s => s.id === formData.scheduleId);
+       if (sched) {
+          setFormData(prev => ({
+             ...prev,
+             date: sched.date,
+             sessionGroup: sched.sessionGroup || sched.name,
+             tutorName: sched.tutor
+          }));
+       }
+    }
+  }, [formData.scheduleId, availableSchedules, isEditingId]);
 
   const handleSave = (e) => {
     e.preventDefault();
+    if (!formData.scheduleId) {
+       return showToast('Schedule ID is required', 'error');
+    }
     if (isEditingId) {
-      setDb((prev) => ({ ...prev, journals: prev.journals.map((j) => j.id === isEditingId ? { ...formData, id: isEditingId, tutorName: j.tutorName } : j ) }));
+      setDb((prev) => ({ ...prev, journals: prev.journals.map((j) => j.id === isEditingId ? { ...j, ...formData } : j ) }));
       showToast('Journal updated'); setIsEditingId(null);
     } else {
-      setDb((prev) => ({ ...prev, journals: [ ...prev.journals, { id: generateId('JRN', 'journals'), ...formData, tutorName: user.name } ] }));
+      setDb((prev) => ({ ...prev, journals: [ ...prev.journals, { id: generateId('JRN', 'journals'), ...formData } ] }));
       showToast('Journal saved');
     }
-    setFormData({ date: getTodayDateLocal(), sessionGroup: SESSIONS[0], topic: '', activities: '', notes: '', followUp: '' });
+    setFormData({ scheduleId: '', date: '', sessionGroup: '', tutorName: '', topic: '', learningObjectives: '', activities: '', notes: '', homework: '' });
   };
+
+  const handleEdit = (j) => {
+     setFormData({ 
+        scheduleId: j.scheduleId || '', 
+        date: j.date || '', 
+        sessionGroup: j.sessionGroup || '', 
+        tutorName: j.tutorName || '', 
+        topic: j.topic || '', 
+        learningObjectives: j.learningObjectives || '', 
+        activities: j.activities || '', 
+        notes: j.notes || '', 
+        homework: j.homework || j.followUp || '' 
+     });
+     setIsEditingId(j.id);
+     const contentEl = document.querySelector('main'); 
+     setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50);
+  };
+
+  const displayedJournals = useMemo(() => {
+    let jList = db.journals.slice().reverse();
+    if (user.role === 'tutor') {
+        jList = jList.filter(j => j.tutorName && j.tutorName.includes(user.name));
+    }
+    return jList;
+  }, [db.journals, user]);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <Card className="lg:col-span-1 border-[#00D4FF]/20 border shadow-[0_0_20px_rgba(0,212,255,0.05)]">
         <h3 className="font-semibold text-white mb-4">{isEditingId ? 'Edit' : 'New'} Entry</h3>
+        
+        {availableSchedules.length === 0 ? (
+            <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm font-medium mb-4">
+               No Academic Calendar schedule available. Please create a schedule first.
+            </div>
+        ) : null}
+
         <form onSubmit={handleSave} className="space-y-4">
-          <Input label="Date" type="date" value={formData.date} onChange={(v) => setFormData({ ...formData, date: v })} required />
-          <Input label="Session" type="select" options={SESSIONS} value={formData.sessionGroup} onChange={(v) => setFormData({ ...formData, sessionGroup: v })} required />
-          <Input label="Learning Material (Topic)" value={formData.topic} onChange={(v) => setFormData({ ...formData, topic: v })} required />
-          <div className="mb-4">
-            <label className="block text-sm text-gray-400 mb-1">Learning Activities</label>
-            <textarea className="w-full bg-[#0B0F19] border border-gray-700 rounded p-2 text-white h-24" value={formData.activities} onChange={(e) => setFormData({ ...formData, activities: e.target.value }) } required />
+          <Input 
+             label="Select Schedule *" 
+             type="select" 
+             options={[
+               { value: '', label: 'Select a schedule...' },
+               ...availableSchedules.map(c => ({ value: c.id, label: `${formatDropdownDate(c.date)} - ${c.sessionGroup || c.name}` }))
+             ]} 
+             value={formData.scheduleId} 
+             onChange={(v) => setFormData({ ...formData, scheduleId: v })} 
+             required 
+          />
+          
+          <div className="grid grid-cols-2 gap-2">
+             <Input label="Date" value={formData.date ? formatDropdownDate(formData.date) : ''} onChange={()=>{}} disabled />
+             <Input label="Session" value={formData.sessionGroup} onChange={()=>{}} disabled />
           </div>
+          <Input label="Tutor" value={formData.tutorName || user.name} onChange={()=>{}} disabled />
+          
+          <Input label="Topic *" value={formData.topic} onChange={(v) => setFormData({ ...formData, topic: v })} required disabled={!formData.scheduleId} />
+          
+          <div className="mb-4">
+            <label className="block text-sm text-gray-400 mb-1">Learning Objectives</label>
+            <textarea className="w-full bg-[#0B0F19] border border-gray-700 rounded p-2 text-white h-16 disabled:opacity-50" value={formData.learningObjectives} onChange={(e) => setFormData({ ...formData, learningObjectives: e.target.value }) } disabled={!formData.scheduleId} />
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm text-gray-400 mb-1">Learning Activities *</label>
+            <textarea className="w-full bg-[#0B0F19] border border-gray-700 rounded p-2 text-white h-24 disabled:opacity-50" value={formData.activities} onChange={(e) => setFormData({ ...formData, activities: e.target.value }) } required disabled={!formData.scheduleId} />
+          </div>
+          
           <div className="mb-4">
             <label className="block text-sm text-gray-400 mb-1">Tutor Notes</label>
-            <textarea className="w-full bg-[#0B0F19] border border-gray-700 rounded p-2 text-white h-16" value={formData.notes} onChange={(e) => setFormData({ ...formData, notes: e.target.value }) } />
+            <textarea className="w-full bg-[#0B0F19] border border-gray-700 rounded p-2 text-white h-16 disabled:opacity-50" value={formData.notes} onChange={(e) => setFormData({ ...formData, notes: e.target.value }) } disabled={!formData.scheduleId} />
           </div>
-          <Input label="Follow-Up Actions" value={formData.followUp} onChange={(v) => setFormData({ ...formData, followUp: v })} />
+          
+          <Input label="Homework / Follow-Up" value={formData.homework} onChange={(v) => setFormData({ ...formData, homework: v })} disabled={!formData.scheduleId} />
+          
           <div className="flex gap-2 justify-center">
-            {isEditingId && <Button variant="ghost" className="flex-1" onClick={() => { setIsEditingId(null); setFormData({ date: new Date().toISOString().split('T')[0], sessionGroup: SESSIONS[0], topic: '', activities: '', notes: '', followUp: '' }); }}>Cancel</Button>}
-            <Button type="submit" className="flex-1">Submit</Button>
+            {isEditingId && <Button variant="ghost" className="flex-1" onClick={() => { setIsEditingId(null); setFormData({ scheduleId: '', date: '', sessionGroup: '', tutorName: '', topic: '', learningObjectives: '', activities: '', notes: '', homework: '' }); }}>Cancel</Button>}
+            <Button type="submit" className="flex-1" disabled={availableSchedules.length === 0 || !formData.scheduleId}>Submit</Button>
           </div>
         </form>
       </Card>
-      <Card className="lg:col-span-2 p-0 h-[650px] flex flex-col">
-        <div className="p-4 border-b border-gray-800 bg-[#0A0E17]"><h3 className="font-semibold text-white">Recent Journals</h3></div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {db.journals.slice().reverse().map((j) => (
-            <div key={j.id} className="bg-[#0B0F19] p-4 rounded-xl border border-gray-800">
-              <div className="flex justify-between"><div><h4 className="text-white font-medium">{j.topic}</h4><p className="text-[#00D4FF] text-sm">{j.sessionGroup}</p></div><div className="text-right text-xs text-gray-500"><p>{j.date}</p><p>by {j.tutorName}</p></div></div>
-              <p className="text-sm text-gray-400 mt-2"><strong>Activities:</strong> {j.activities}</p>
-              {j.notes && <p className="text-sm text-gray-500 mt-1"><strong>Notes:</strong> {j.notes}</p>}
-              {j.followUp && <p className="text-sm text-gray-500 mt-1"><strong>Follow Up:</strong> {j.followUp}</p>}
-              {(user.role === 'admin' || user.name === j.tutorName) && (
-                <div className="mt-3 pt-3 border-t border-gray-800 flex justify-center gap-3">
-                  <button onClick={() => {setFormData(j); setIsEditingId(j.id); const contentEl = document.querySelector('main'); setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50);}} className="text-blue-400 text-xs flex items-center gap-1"><Edit2 size={12} /> Edit</button>
-                  <button onClick={() => softDelete('journals', j.id, 'Journal')} className="text-red-400 text-xs flex items-center gap-1"><Trash2 size={12} /> Delete</button>
+      <Card className="lg:col-span-2 p-0 h-[850px] flex flex-col">
+        <div className="p-5 border-b border-gray-800 bg-[#0A0E17]"><h3 className="font-semibold text-white text-lg">Recent Journals</h3></div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-5 custom-scrollbar">
+          {displayedJournals.map((j) => {
+            const todayStr = getTodayDateLocal();
+            const isCompleted = j.date <= todayStr;
+            const statusText = isCompleted ? "Class Completed" : "Class Not Held Yet";
+            const StatusIcon = isCompleted ? CheckCircle2 : Clock;
+            const statusColor = isCompleted ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20";
+            
+            return (
+              <div key={j.id} className="bg-[#151B26] p-6 rounded-[20px] border border-gray-700/50 hover:border-[#00D4FF]/40 shadow-lg hover:shadow-[0_8px_30px_rgba(0,212,255,0.05)] transition-all group relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-[#00D4FF]/5 blur-3xl rounded-full pointer-events-none group-hover:bg-[#00D4FF]/10 transition-colors"></div>
+
+                <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-6 gap-5 relative z-10">
+                    <div className="flex flex-col">
+                        <div className="flex flex-wrap items-center gap-2 mb-2.5">
+                            <span className="px-3 py-1 bg-[#00D4FF]/10 text-[#00D4FF] border border-[#00D4FF]/20 rounded-full text-[11px] font-bold tracking-widest uppercase">
+                                {j.sessionGroup}
+                            </span>
+                            <span className={`px-3 py-1 rounded-full text-[11px] font-bold tracking-widest uppercase flex items-center gap-1.5 border ${statusColor}`}>
+                                <StatusIcon size={12} /> {statusText}
+                            </span>
+                        </div>
+                        <h4 className="text-white font-black text-2xl tracking-tight group-hover:text-[#00D4FF] transition-colors leading-tight">{j.topic}</h4>
+                    </div>
+                    
+                    <div className="text-left xl:text-right bg-[#0B0F19] px-4 py-3 rounded-xl border border-gray-800 shadow-inner min-w-[240px] w-full xl:w-auto">
+                        <p className="text-gray-300 text-sm font-bold flex items-center xl:justify-end gap-2.5 mb-1.5">
+                            <CalendarIcon size={16} className="text-[#00D4FF]" />
+                            {formatDropdownDate(j.date)}
+                        </p>
+                        <p className="text-gray-500 text-xs font-medium flex items-center xl:justify-end gap-2">
+                            <User size={14} /> Tutor: <span className="text-gray-300 font-bold">{j.tutorName}</span>
+                        </p>
+                    </div>
                 </div>
-              )}
-            </div>
-          ))}
+
+                <div className="space-y-4 relative z-10 bg-[#0B0F19]/50 p-5 rounded-xl border border-gray-800/50">
+                    {j.learningObjectives && (
+                      <div className="flex items-start gap-3">
+                          <div className="p-1.5 bg-blue-500/10 rounded-lg text-blue-400 mt-0.5"><CheckSquare size={16} /></div>
+                          <div>
+                              <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1">Learning Objectives</p>
+                              <p className="text-sm text-gray-200 leading-relaxed">{j.learningObjectives}</p>
+                          </div>
+                      </div>
+                    )}
+                    <div className="flex items-start gap-3">
+                        <div className="p-1.5 bg-purple-500/10 rounded-lg text-purple-400 mt-0.5"><Activity size={16} /></div>
+                        <div>
+                            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1">Activities</p>
+                            <p className="text-sm text-gray-200 leading-relaxed">{j.activities}</p>
+                        </div>
+                    </div>
+                    {j.notes && (
+                        <div className="flex items-start gap-3">
+                            <div className="p-1.5 bg-amber-500/10 rounded-lg text-amber-400 mt-0.5"><BookOpen size={16} /></div>
+                            <div>
+                                <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1">Tutor Notes</p>
+                                <p className="text-sm text-gray-400 leading-relaxed">{j.notes}</p>
+                            </div>
+                        </div>
+                    )}
+                    {(j.homework || j.followUp) && (
+                        <div className="flex items-start gap-3">
+                            <div className="p-1.5 bg-rose-500/10 rounded-lg text-rose-400 mt-0.5"><Bell size={16} /></div>
+                            <div>
+                                <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1">Homework / Follow-up</p>
+                                <p className="text-sm text-gray-200 font-medium leading-relaxed">{j.homework || j.followUp}</p>
+                            </div>
+                        </div>
+                    )}
+                </div>
+                
+                {(user.role === 'admin' || user.name === j.tutorName) && (
+                    <div className="mt-5 pt-4 border-t border-gray-800/80 flex justify-end gap-3 relative z-10">
+                      <Button variant="ghost" onClick={() => handleEdit(j)} className="text-sm text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 px-4 py-2 h-auto" icon={Edit2}>Edit</Button>
+                      <Button variant="ghost" onClick={() => softDelete('journals', j.id, 'Journal')} className="text-sm text-red-400 hover:text-red-300 hover:bg-red-500/10 px-4 py-2 h-auto" icon={Trash2}>Delete</Button>
+                    </div>
+                )}
+              </div>
+            );
+          })}
+          {displayedJournals.length === 0 && (
+             <div className="flex flex-col items-center justify-center p-12 text-center border border-gray-800 rounded-[20px] bg-[#151B26]">
+                 <BookOpen size={48} className="text-gray-700 mb-4" />
+                 <h3 className="text-lg font-bold text-white mb-2">No Journals Found</h3>
+                 <p className="text-gray-500 text-sm">Learning journals will appear here once they are submitted.</p>
+             </div>
+          )}
         </div>
       </Card>
     </div>
@@ -3005,27 +3441,55 @@ function AnnouncementsModule({ db, setDb, generateId, user, showToast, softDelet
 function CalendarModule({ db, setDb, generateId, showToast, user, softDelete }) {
   const [formData, setFormData] = useState({ sessionGroup: SESSIONS[0], date: '', startTime: '', endTime: '', tutor: '' });
   const [isEditingId, setIsEditingId] = useState(null);
-
+  const [filterMonth, setFilterMonth] = useState<number | string>(new Date().getMonth() + 1);
+  const [filterYear, setFilterYear] = useState(new Date().getFullYear());
+  
   // Auto-fill tutor based on selected session (Updated for Co-Teaching)
   useEffect(() => {
-    if (formData.sessionGroup) {
-      const assignedTutors = db.tutors.filter(t => t.teachingSession === formData.sessionGroup && t.status === 'Active');
-      const tutorNames = assignedTutors.length > 0 ? assignedTutors.map(t => t.name).join(' & ') : 'No Tutor Assigned';
-      setFormData(prev => ({ ...prev, tutor: tutorNames }));
+    if (formData.sessionGroup && !isEditingId) {
+       const relevantTutors = db.tutors.filter(t => t.teachingSession === formData.sessionGroup && t.status === 'Active');
+       if (relevantTutors.length > 0) {
+           const tutorNames = relevantTutors.map(t => t.name).join(' & ');
+           setFormData(prev => ({ ...prev, tutor: tutorNames }));
+       } else {
+           setFormData(prev => ({ ...prev, tutor: '' }));
+       }
     }
-  }, [formData.sessionGroup, db.tutors]);
+  }, [formData.sessionGroup, db.tutors, isEditingId]);
 
   const handleSave = (e) => {
     e.preventDefault();
     if (isEditingId) {
-      setDb((p) => ({ ...p, calendar: p.calendar.map((c) => c.id === isEditingId ? { ...formData, id: isEditingId } : c ) }));
-      showToast('Updated'); setIsEditingId(null);
+      setDb((p) => ({ ...p, calendar: p.calendar.map((c) => c.id === isEditingId ? { ...c, ...formData } : c ) }));
+      showToast('Event updated'); setIsEditingId(null);
     } else {
       setDb((p) => ({ ...p, calendar: [ ...p.calendar, { id: generateId('CAL', 'calendar'), ...formData } ] }));
-      showToast('Event Saved');
+      showToast('Event created');
     }
     setFormData({ sessionGroup: SESSIONS[0], date: '', startTime: '', endTime: '', tutor: '' });
   };
+
+  const displayCalendar = useMemo(() => {
+    let cal = [...(db.calendar || [])].sort((a,b) => a.date.localeCompare(b.date));
+    
+    // Apply Month/Year filter first
+    cal = cal.filter(c => {
+       if (filterMonth !== 'All') {
+          const prefix = `${filterYear}-${String(filterMonth).padStart(2, '0')}`;
+          return c.date.startsWith(prefix);
+       }
+       return c.date.startsWith(String(filterYear));
+    });
+
+    if (user.role === 'tutor') {
+      return cal.filter(c => c.tutor && c.tutor.split(' & ').includes(user.name));
+    } else if (user.role === 'student') {
+      const student = db.students.find(s => s.id === user.studentId);
+      const mySession = student ? getSessionGroup(student.class) : '';
+      return cal.filter(c => (c.sessionGroup || c.name) === mySession);
+    }
+    return cal;
+  }, [db.calendar, db.students, user, filterMonth, filterYear]);
 
   return (
     <div className="space-y-6">
@@ -3048,14 +3512,24 @@ function CalendarModule({ db, setDb, generateId, showToast, user, softDelete }) 
         </Card>
       )}
       <Card className="p-0 overflow-x-auto">
+        <div className="p-4 bg-[#0A0E17] border-b border-gray-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+           <h3 className="font-semibold text-white">Academic Calendar</h3>
+           <div className="flex gap-2 w-full sm:w-auto">
+              <select className="bg-[#151B26] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-[#00D4FF] flex-1 sm:flex-none" value={filterMonth} onChange={e => setFilterMonth(e.target.value === 'All' ? 'All' : Number(e.target.value))}>
+                <option value="All">All Months</option>
+                {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+              </select>
+              <input type="number" className="bg-[#151B26] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white w-24 focus:border-[#00D4FF]" value={filterYear} onChange={e => setFilterYear(Number(e.target.value))} />
+           </div>
+        </div>
         <table className="w-full text-left text-sm">
-          <thead className="bg-[#0A0E17] border-b border-gray-800">
+          <thead className="bg-[#0B0F19] border-b border-gray-800">
             <tr><th className="p-4 text-center">Date</th><th className="p-4 text-center">Time</th><th className="p-4 text-center">Session</th><th className="p-4 text-center">Tutor</th>{user.role === 'admin' && <th className="p-4 text-center">Actions</th>}</tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {db.calendar.slice().reverse().map((c) => (
+            {displayCalendar.map((c) => (
                 <tr key={c.id} className="hover:bg-[#0B0F19]">
-                  <td className="p-4 text-center whitespace-nowrap">{c.date}</td>
+                  <td className="p-4 text-center whitespace-nowrap">{formatDropdownDate(c.date)}</td>
                   <td className="p-4 text-center whitespace-nowrap">{c.startTime} - {c.endTime}</td>
                   <td className="p-4 text-center text-white font-medium">{c.sessionGroup || c.name}</td>
                   <td className="p-4 text-center text-[#00D4FF]">{c.tutor}</td>
@@ -3074,13 +3548,12 @@ function CalendarModule({ db, setDb, generateId, showToast, user, softDelete }) 
   );
 }
 
-function HistoryReportsModule({ db, setDb, showToast, handlePrint }) {
+function HistoryReportsModule({ db, setDb, showToast, handlePrint, user }) {
   const [view, setView] = useState('directory');
   const [dirType, setDirType] = useState('student');
   const [selectedId, setSelectedId] = useState(null);
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterLevel, setFilterLevel] = useState('');
   const [filterSession, setFilterSession] = useState('');
   
   const [currentTeacherComment, setCurrentTeacherComment] = useState('');
@@ -3103,8 +3576,8 @@ function HistoryReportsModule({ db, setDb, showToast, handlePrint }) {
     const students = db.students.filter(
       (s) =>
         s.name.toLowerCase().includes(searchTerm.toLowerCase()) &&
-        (filterLevel ? s.level === filterLevel : true) &&
-        (filterSession ? getSessionGroup(s.class) === filterSession : true)
+        (filterSession ? getSessionGroup(s.class) === filterSession : true) &&
+        (user?.role === 'tutor' ? getSessionGroup(s.class) === user.teachingSession : true)
     );
     const tutors = db.tutors.filter(
       (t) =>
@@ -3120,21 +3593,23 @@ function HistoryReportsModule({ db, setDb, showToast, handlePrint }) {
           </h2>
         </div>
         <div className="flex gap-2 p-1 bg-[#151B26] rounded-lg w-max border border-gray-800">
-          <button onClick={() => { setDirType('student'); setFilterSession(''); setFilterLevel(''); }} className={`px-6 py-2 rounded-md text-sm font-medium ${dirType === 'student' ? 'bg-[#0B0F19] text-[#00D4FF]' : 'text-gray-400'}`}>Student History</button>
-          <button onClick={() => { setDirType('tutor'); setFilterSession(''); setFilterLevel(''); }} className={`px-6 py-2 rounded-md text-sm font-medium ${dirType === 'tutor' ? 'bg-[#0B0F19] text-[#00D4FF]' : 'text-gray-400'}`}>Tutor History</button>
+          <button onClick={() => { setDirType('student'); setFilterSession(''); }} className={`px-6 py-2 rounded-md text-sm font-medium ${dirType === 'student' ? 'bg-[#0B0F19] text-[#00D4FF]' : 'text-gray-400'}`}>Student History</button>
+          {user?.role === 'admin' && (
+             <button onClick={() => { setDirType('tutor'); setFilterSession(''); }} className={`px-6 py-2 rounded-md text-sm font-medium ${dirType === 'tutor' ? 'bg-[#0B0F19] text-[#00D4FF]' : 'text-gray-400'}`}>Tutor History</button>
+          )}
         </div>
         <Card className="p-0 overflow-hidden">
           <div className="p-4 border-b border-gray-800 flex flex-col md:flex-row gap-4 bg-[#0A0E17]">
             <input type="text" placeholder={`Search ${dirType}s...`} className="flex-1 bg-[#151B26] border border-gray-700 rounded-lg px-4 py-2 text-white" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-            {dirType === 'student' && (
-              <select className="bg-[#151B26] border border-gray-700 rounded-lg px-4 py-2 text-white" value={filterLevel} onChange={(e) => setFilterLevel(e.target.value)}>
-                <option value="">All Levels</option>
-                {LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
-              </select>
-            )}
-            <select className="bg-[#151B26] border border-gray-700 rounded-lg px-4 py-2 text-white" value={filterSession} onChange={(e) => setFilterSession(e.target.value)}>
-              <option value="">All Sessions</option>
-              {SESSIONS.map((l) => <option key={l} value={l}>{l}</option>)}
+            <select className="bg-[#151B26] border border-gray-700 rounded-lg px-4 py-2 text-white" value={filterSession} onChange={(e) => setFilterSession(e.target.value)} disabled={user?.role === 'tutor'}>
+              {user?.role === 'tutor' ? (
+                <option value={user.teachingSession}>{user.teachingSession}</option>
+              ) : (
+                <>
+                  <option value="">All Sessions</option>
+                  {SESSIONS.map((l) => <option key={l} value={l}>{l}</option>)}
+                </>
+              )}
             </select>
           </div>
           <div className="overflow-x-auto">
@@ -3150,7 +3625,7 @@ function HistoryReportsModule({ db, setDb, showToast, handlePrint }) {
                       <td className="p-4 text-center text-white">{s.name}</td>
                       <td className="p-4 text-center text-gray-300">{s.class}</td>
                       <td className="p-4 text-center"><Badge status={s.status} /></td>
-                      <td className="p-4 flex justify-center"><Button className="bg-yellow-500 text-yellow-900 hover:bg-yellow-400 font-bold shadow-md hover:shadow-lg transition-all" icon={Eye} onClick={() => openProfile(s.id, 'student')}>VIEW PROFILE</Button></td>
+                      <td className="p-4 flex justify-center"><Button className="bg-yellow-500 text-yellow-900 hover:bg-yellow-400 font-bold shadow-md hover:shadow-lg transition-all" icon={Eye} onClick={() => openProfile(s.id, 'student')}>VIEW HISTORY & REPORTS</Button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -3167,7 +3642,7 @@ function HistoryReportsModule({ db, setDb, showToast, handlePrint }) {
                       <td className="p-4 text-center text-white">{t.name}</td>
                       <td className="p-4 text-center text-gray-300">{t.teachingSession}</td>
                       <td className="p-4 text-center"><Badge status={t.status} /></td>
-                      <td className="p-4 flex justify-center"><Button className="bg-yellow-500 text-yellow-900 hover:bg-yellow-400 font-bold shadow-md hover:shadow-lg transition-all" icon={Eye} onClick={() => openProfile(t.id, 'tutor')}>VIEW PROFILE</Button></td>
+                      <td className="p-4 flex justify-center"><Button className="bg-yellow-500 text-yellow-900 hover:bg-yellow-400 font-bold shadow-md hover:shadow-lg transition-all" icon={Eye} onClick={() => openProfile(t.id, 'tutor')}>VIEW HISTORY & REPORTS</Button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -3702,7 +4177,7 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
   };
 
   const handleDeleteUser = (id, role, name) => {
-    if (id === 'ADM-001') {
+    if (id === 'ADM-001' || id === 'ADM-FALLBACK') {
       showToast('Primary Super Admin cannot be deleted.', 'error');
       return;
     }
@@ -3768,21 +4243,21 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
             <tr><th className="p-4 text-center">Role</th><th className="p-4 text-center">Name</th><th className="p-4 text-center">Username</th><th className="p-4 text-center">Password</th><th className="p-4 text-center">Status</th><th className="p-4 text-center">Actions</th></tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {db.users.filter(u => u.role === 'admin').map((u) => (
-              <tr key={u.id} className="hover:bg-[#0B0F19]">
+            {db.users.filter(u => u.role === 'admin').map((u, idx) => (
+              <tr key={`admin-${u.id}-${idx}`} className="hover:bg-[#0B0F19]">
                 <td className="p-4 text-center text-xs font-bold uppercase text-red-400">Admin</td>
                 <td className="p-4 text-center text-white">{u.name}</td><td className="p-4 text-center">{u.username}</td><td className="p-4 text-center text-gray-500">****</td><td className="p-4 text-center"><Badge status={u.active} /></td>
                 <td className="p-4 text-center flex justify-center gap-2">
                   <button onClick={() => { setFormData({ ...u }); setIsEditingId(u.id); const contentEl = document.querySelector('main'); setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50); }} className="text-blue-400 p-1" title="Edit Profile"><Edit2 size={16} /></button>
                   <button onClick={() => { setResetDialog({ id: u.id, role: u.role, name: u.name }); }} className="text-yellow-500 p-1" title="Reset Password"><KeyRound size={16} /></button>
-                  {u.id !== 'ADM-001' && (
+                  {u.id !== 'ADM-001' && u.id !== 'ADM-FALLBACK' && (
                     <button onClick={() => handleDeleteUser(u.id, u.role, u.name)} className="text-red-500 p-1" title="Delete User"><Trash2 size={16} /></button>
                   )}
                 </td>
               </tr>
             ))}
-            {db.tutors.map((t) => (
-              <tr key={t.id} className="hover:bg-[#0B0F19]">
+            {db.tutors.map((t, idx) => (
+              <tr key={`tutor-${t.id}-${idx}`} className="hover:bg-[#0B0F19]">
                 <td className="p-4 text-center text-xs font-bold uppercase text-purple-400">Tutor</td>
                 <td className="p-4 text-center text-white">{t.name}</td><td className="p-4 text-center">{t.username}</td><td className="p-4 text-center text-gray-500">****</td><td className="p-4 text-center"><Badge status={t.status} /></td>
                 <td className="p-4 text-center flex justify-center gap-2">
@@ -3792,8 +4267,8 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
                 </td>
               </tr>
             ))}
-            {db.users.filter(u => u.role === 'student').map((u) => (
-              <tr key={u.id} className="hover:bg-[#0B0F19]">
+            {db.users.filter(u => u.role === 'student').map((u, idx) => (
+              <tr key={`student-${u.id}-${idx}`} className="hover:bg-[#0B0F19]">
                 <td className="p-4 text-center text-xs font-bold uppercase text-blue-400">Student</td>
                 <td className="p-4 text-center text-white">{u.name}</td><td className="p-4 text-center">{u.username}</td><td className="p-4 text-center text-gray-500">****</td><td className="p-4 text-center"><Badge status={u.active} /></td>
                 <td className="p-4 text-center flex justify-center gap-2">
@@ -3873,11 +4348,30 @@ function AccountSettingsModule({ db, setDb, user, setCurrentUser, showToast }) {
 // MODULES KHUSUS STUDENT (READ-ONLY)
 
 function StudentReadOnlyAttendanceModule({ db, user }) {
-  const myAtt = db.studentAttendance.filter(a => a.studentId === user.studentId).reverse();
+  const [filterMonth, setFilterMonth] = useState<number | string>(new Date().getMonth() + 1);
+  const [filterYear, setFilterYear] = useState(new Date().getFullYear());
+
+  const myAtt = db.studentAttendance.filter(a => {
+    if (a.studentId !== user.studentId) return false;
+    if (filterMonth !== 'All') {
+       const prefix = `${filterYear}-${String(filterMonth).padStart(2, '0')}`;
+       return a.date.startsWith(prefix);
+    }
+    return a.date.startsWith(String(filterYear));
+  }).reverse();
   
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-white">My Attendance Record</h2>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+         <h2 className="text-2xl font-bold text-white">My Attendance Record</h2>
+         <div className="flex gap-2 w-full sm:w-auto">
+            <select className="bg-[#151B26] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-[#00D4FF] flex-1 sm:flex-none" value={filterMonth} onChange={e => setFilterMonth(e.target.value === 'All' ? 'All' : Number(e.target.value))}>
+              <option value="All">All Months</option>
+              {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+            </select>
+            <input type="number" className="bg-[#151B26] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white w-24 focus:border-[#00D4FF]" value={filterYear} onChange={e => setFilterYear(Number(e.target.value))} />
+         </div>
+      </div>
       <Card className="p-0 overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead className="bg-[#0A0E17] border-b border-gray-800">
@@ -3899,13 +4393,32 @@ function StudentReadOnlyAttendanceModule({ db, user }) {
 }
 
 function StudentReadOnlyJournalsModule({ db, user }) {
+  const [filterMonth, setFilterMonth] = useState<number | string>(new Date().getMonth() + 1);
+  const [filterYear, setFilterYear] = useState(new Date().getFullYear());
+
   const student = db.students.find(s => s.id === user.studentId);
   const myGroup = student ? getSessionGroup(student.class) : '';
-  const myJournals = db.journals.filter(j => j.sessionGroup === myGroup).reverse();
+  const myJournals = db.journals.filter(j => {
+     if (j.sessionGroup !== myGroup) return false;
+     if (filterMonth !== 'All') {
+       const prefix = `${filterYear}-${String(filterMonth).padStart(2, '0')}`;
+       return j.date.startsWith(prefix);
+     }
+     return j.date.startsWith(String(filterYear));
+  }).reverse();
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-white">My Learning Materials</h2>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+         <h2 className="text-2xl font-bold text-white">My Learning Materials</h2>
+         <div className="flex gap-2 w-full sm:w-auto">
+            <select className="bg-[#151B26] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-[#00D4FF] flex-1 sm:flex-none" value={filterMonth} onChange={e => setFilterMonth(e.target.value === 'All' ? 'All' : Number(e.target.value))}>
+              <option value="All">All Months</option>
+              {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+            </select>
+            <input type="number" className="bg-[#151B26] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white w-24 focus:border-[#00D4FF]" value={filterYear} onChange={e => setFilterYear(Number(e.target.value))} />
+         </div>
+      </div>
       <div className="space-y-4">
         {myJournals.length > 0 ? myJournals.map(j => (
           <Card key={j.id} className="border-[#00D4FF]/20 shadow-md">
@@ -3928,11 +4441,20 @@ function StudentReadOnlyJournalsModule({ db, user }) {
 }
 
 function StudentReadOnlyAssessmentModule({ db, user }) {
-  const myAssessments = db.assessments.filter(a => a.studentId === user.studentId).sort((a,b) => (b.year+b.month).localeCompare(a.year+a.month));
+  const [filterYear, setFilterYear] = useState(new Date().getFullYear());
+
+  const myAssessments = db.assessments
+    .filter(a => a.studentId === user.studentId && Number(a.year) === filterYear)
+    .sort((a,b) => (b.year+b.month).localeCompare(a.year+a.month));
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-white">My Assessment Results</h2>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+         <h2 className="text-2xl font-bold text-white">My Assessment Results</h2>
+         <div className="flex gap-2 w-full sm:w-auto">
+            <input type="number" className="bg-[#151B26] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white w-24 focus:border-[#00D4FF]" value={filterYear} onChange={e => setFilterYear(Number(e.target.value))} placeholder="Year" />
+         </div>
+      </div>
       <Card className="p-0 overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead className="bg-[#0A0E17] border-b border-gray-800">
@@ -3963,12 +4485,125 @@ function StudentReadOnlyAssessmentModule({ db, user }) {
   )
 }
 
-function StudentReadOnlyPaymentModule({ db, user }) {
-  const myPayments = db.payments.filter(p => p.studentId === user.studentId).sort((a,b) => (b.year+b.month).localeCompare(a.year+a.month));
+function StudentReadOnlyPaymentModule({ db, user, downloadPNG, handleShareImage }) {
+  const [filterYear, setFilterYear] = useState(new Date().getFullYear());
+  const [selectedInvoice, setSelectedInvoice] = useState(null);
+
+  const myPayments = db.payments
+    .filter(p => p.studentId === user.studentId && Number(p.year) === filterYear)
+    .sort((a,b) => (b.year+b.month).localeCompare(a.year+a.month));
+
+  const localPrintPayment = () => {
+    if (!selectedInvoice) return;
+    const originalTitle = document.title;
+    const safeName = selectedInvoice.studentName.replace(/\s+/g, '_');
+    document.title = `${safeName}_payment`;
+    window.print();
+    setTimeout(() => { document.title = originalTitle; }, 1000);
+  };
+
+  if (selectedInvoice) return (
+    <div className="fixed inset-0 z-[100] bg-slate-50/95 backdrop-blur-md overflow-y-auto print:bg-white print:static print:block print:z-auto custom-scrollbar font-sans text-slate-900">
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[80%] h-[400px] bg-gradient-to-b from-blue-200/40 to-transparent blur-3xl pointer-events-none print:hidden" />
+      
+      <div className="w-full max-w-2xl mx-auto mt-6 mb-4 px-4 flex justify-between items-center relative z-10 print:hidden">
+        <button className="flex items-center gap-2 text-slate-500 hover:text-slate-800 transition-colors font-medium text-sm bg-white/50 px-4 py-2 rounded-full border border-slate-200/50 shadow-sm" onClick={() => setSelectedInvoice(null)}>
+          <ArrowLeft size={16} /> Back
+        </button>
+        <div className="flex gap-2">
+          <button onClick={localPrintPayment} className="p-2.5 bg-white rounded-full text-blue-600 shadow-sm border border-slate-200/50 hover:bg-blue-50 transition-colors" title="Print PDF"><Printer size={16}/></button>
+          <button onClick={() => {
+             const safeName = selectedInvoice.studentName.replace(/\s+/g, '_');
+             downloadPNG('receipt-print', `${safeName}_payment`);
+          }} className="p-2.5 bg-white rounded-full text-blue-600 shadow-sm border border-slate-200/50 hover:bg-blue-50 transition-colors" title="Download PNG"><Download size={16}/></button>
+          <button onClick={() => {
+             const safeName = selectedInvoice.studentName.replace(/\s+/g, '_');
+             handleShareImage('receipt-print', `${safeName}_payment`, `Receipt for ${selectedInvoice.studentName}`);
+          }} className="p-2.5 bg-white rounded-full text-blue-600 shadow-sm border border-slate-200/50 hover:bg-blue-50 transition-colors" title="Share"><Share2 size={16}/></button>
+        </div>
+      </div>
+
+      <div id="receipt-print" className="w-full max-w-2xl mx-auto bg-white rounded-none shadow-2xl overflow-hidden relative z-10 mb-12 print:m-0 print:shadow-none print:max-w-full print:rounded-none">
+        <div className="bg-[#1A56DB] text-white p-6 sm:p-8 flex justify-between items-start">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-black tracking-tight">PAYMENT RECEIPT</h1>
+            <p className="text-blue-200 font-mono mt-1 text-sm">{selectedInvoice.id}</p>
+          </div>
+          <div className="text-right">
+            <p className="text-lg font-bold text-white leading-tight">English Club Gresik</p>
+            <p className="text-blue-200 text-xs mt-1">Academic Suite</p>
+          </div>
+        </div>
+
+        <div className="p-6 sm:p-8 pb-4">
+          <div className="text-center mb-8 border-b border-slate-200 pb-8">
+            <p className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-2">
+              Tuition Fee {MONTHS[parseInt(selectedInvoice.month) - 1]} {selectedInvoice.year}
+            </p>
+            <p className="text-5xl font-black text-slate-900 tracking-tight">
+              Rp {Number(selectedInvoice.amount).toLocaleString('id-ID')}
+            </p>
+          </div>
+
+          <div className="mb-6">
+            <p className="text-[10px] text-[#1A56DB] font-bold uppercase tracking-wider mb-2 px-2">STUDENT INFO</p>
+            <div className="bg-slate-50 border border-slate-200 p-5 shadow-sm">
+              <p className="text-xl font-bold text-slate-800">{selectedInvoice.studentName}</p>
+              <p className="text-sm font-medium text-slate-500 mt-1">{selectedInvoice.class} · {selectedInvoice.sessionGroup}</p>
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <p className="text-[10px] text-[#1A56DB] font-bold uppercase tracking-wider mb-2 px-2">TRANSACTION DETAILS</p>
+            <div className="space-y-0 text-sm">
+              <div className="flex justify-between items-center border-b border-slate-100 py-3 px-2">
+                <span className="font-medium text-slate-600">Date</span>
+                <span className="font-semibold text-slate-800">
+                  {new Date(selectedInvoice.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                </span>
+              </div>
+              <div className="flex justify-between items-center border-b border-slate-100 py-3 px-2">
+                <span className="font-medium text-slate-600">Method</span>
+                <span className="font-semibold text-slate-800">{selectedInvoice.method}</span>
+              </div>
+              <div className="flex justify-between items-center border-b border-slate-100 py-3 px-2">
+                <span className="font-medium text-slate-600">Receipt No.</span>
+                <span className="font-mono font-semibold text-slate-800">{selectedInvoice.id}</span>
+              </div>
+              <div className="flex justify-between items-center py-3 px-2">
+                <span className="font-medium text-slate-600">Status</span>
+                <span className="text-lg font-black text-green-700">PAID</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="text-center mt-12 mb-4">
+            <p className="text-sm font-medium text-slate-600 italic">Thank you for your payment.</p>
+            <p className="text-xs font-bold text-slate-500 mt-1">— Akhmad Akmal Rifqi</p>
+          </div>
+        </div>
+
+        <div className="bg-[#1A56DB] p-6 sm:p-8 text-center">
+          <p className="text-xs text-blue-100 font-medium mb-1">English Club Gresik • WA: 0897-327-11-12</p>
+          <p className="text-[10px] text-blue-200 mb-3">Taman Anggrek Blok AB 05, Kedanyang, Kebomas, Gresik</p>
+          <div className="border-t border-blue-400/30 pt-3">
+            <p className="text-[10px] text-blue-200">
+              This document serves as an official payment receipt
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-white">My Payment History</h2>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+         <h2 className="text-2xl font-bold text-white">My Payment History</h2>
+         <div className="flex gap-2 w-full sm:w-auto">
+            <input type="number" className="bg-[#151B26] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white w-24 focus:border-[#00D4FF]" value={filterYear} onChange={e => setFilterYear(Number(e.target.value))} placeholder="Year" />
+         </div>
+      </div>
       <Card className="p-0 overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead className="bg-[#0A0E17] border-b border-gray-800">
@@ -3978,6 +4613,7 @@ function StudentReadOnlyPaymentModule({ db, user }) {
               <th className="p-4 text-center">Amount Paid</th>
               <th className="p-4 text-center">Date</th>
               <th className="p-4 text-center">Status</th>
+              <th className="p-4 text-center">Receipt</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
@@ -3988,8 +4624,15 @@ function StudentReadOnlyPaymentModule({ db, user }) {
                 <td className="p-4 text-center font-bold text-green-400">Rp {Number(p.amount).toLocaleString()}</td>
                 <td className="p-4 text-center text-gray-400">{p.date}</td>
                 <td className="p-4 text-center"><Badge status={p.status} /></td>
+                <td className="p-4 text-center">
+                  {p.status === 'Paid' ? (
+                     <Button variant="ghost" className="text-xs px-3 py-1 h-8 mx-auto flex items-center gap-2" onClick={() => setSelectedInvoice(p)}><FileText size={14} /> Download</Button>
+                  ) : (
+                     <span className="text-gray-500 text-xs">-</span>
+                  )}
+                </td>
               </tr>
-            )) : <tr><td colSpan={5} className="p-8 text-center text-gray-500">No payment records found.</td></tr>}
+            )) : <tr><td colSpan={6} className="p-8 text-center text-gray-500">No payment records found.</td></tr>}
           </tbody>
         </table>
       </Card>
@@ -4388,7 +5031,8 @@ const getLinkPreview = (url) => {
 };
 
 function MaterialsModule({ db, setDb, generateId, showToast, softDelete, user }) {
-  const [formData, setFormData] = useState({ title: '', sessionGroup: SESSIONS[0], link: '', notes: '' });
+  const defaultSession = user.role === 'tutor' ? user.teachingSession : SESSIONS[0];
+  const [formData, setFormData] = useState({ title: '', sessionGroup: defaultSession, link: '', notes: '' });
   const [isAdding, setIsAdding] = useState(false);
   const [isEditingId, setIsEditingId] = useState(null);
   const [replyTexts, setReplyTexts] = useState({});
@@ -4396,6 +5040,11 @@ function MaterialsModule({ db, setDb, generateId, showToast, softDelete, user })
   const handleSave = (e) => {
     e.preventDefault();
     if (!formData.link) return showToast('Link cannot be empty', 'error');
+    
+    // Enforce tutor restriction
+    if (user.role === 'tutor' && formData.sessionGroup !== user.teachingSession) {
+        return showToast('You can only manage materials for your assigned session.', 'error');
+    }
     
     if (isEditingId) {
        setDb(p => ({
@@ -4418,7 +5067,7 @@ function MaterialsModule({ db, setDb, generateId, showToast, softDelete, user })
     
     setIsAdding(false);
     setIsEditingId(null);
-    setFormData({ title: '', sessionGroup: SESSIONS[0], link: '', notes: '' });
+    setFormData({ title: '', sessionGroup: defaultSession, link: '', notes: '' });
   };
 
   const editMaterial = (mat) => {
@@ -4434,6 +5083,9 @@ function MaterialsModule({ db, setDb, generateId, showToast, softDelete, user })
       const newMats = [...(p.materials || [])];
       const matIdx = newMats.findIndex(m => m.id === matId);
       if (matIdx > -1) {
+        newMats[matIdx] = { ...newMats[matIdx] }; // deep copy material
+        newMats[matIdx].submissions = [...(newMats[matIdx].submissions || [])]; // deep copy submissions
+        newMats[matIdx].submissions[subIdx] = { ...newMats[matIdx].submissions[subIdx] }; // deep copy submission
         newMats[matIdx].submissions[subIdx].checked = !newMats[matIdx].submissions[subIdx].checked;
       }
       return { ...p, materials: newMats };
@@ -4447,14 +5099,17 @@ function MaterialsModule({ db, setDb, generateId, showToast, softDelete, user })
         const newMats = [...(p.materials || [])];
         const matIdx = newMats.findIndex(m => m.id === matId);
         if (matIdx > -1) {
-           const sub = newMats[matIdx].submissions[subIdx];
-           sub.replies = [...(sub.replies || []), {
+           newMats[matIdx] = { ...newMats[matIdx] }; // deep copy material
+           newMats[matIdx].submissions = [...(newMats[matIdx].submissions || [])]; // deep copy submissions
+           newMats[matIdx].submissions[subIdx] = { ...newMats[matIdx].submissions[subIdx] }; // deep copy submission
+           
+           newMats[matIdx].submissions[subIdx].replies = [...(newMats[matIdx].submissions[subIdx].replies || []), {
                senderRole: 'tutor',
                senderName: user.name,
                text,
                date: new Date().toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })
            }];
-           sub.checked = true; // Auto-check saat tutor mereply
+           newMats[matIdx].submissions[subIdx].checked = true; // Auto-check saat tutor mereply
         }
         return { ...p, materials: newMats };
      });
@@ -4467,7 +5122,7 @@ function MaterialsModule({ db, setDb, generateId, showToast, softDelete, user })
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-white">Materials & Tasks</h2>
-        <Button onClick={() => { setIsAdding(!isAdding); setIsEditingId(null); setFormData({ title: '', sessionGroup: SESSIONS[0], link: '', notes: '' }); }} icon={Plus}>Add Material</Button>
+        <Button onClick={() => { setIsAdding(!isAdding); setIsEditingId(null); setFormData({ title: '', sessionGroup: defaultSession, link: '', notes: '' }); }} icon={Plus}>Add Material</Button>
       </div>
 
       {isAdding && (
@@ -4475,7 +5130,15 @@ function MaterialsModule({ db, setDb, generateId, showToast, softDelete, user })
           <h3 className="text-lg font-bold text-white mb-4">{isEditingId ? 'Edit Material' : 'Publish Material'}</h3>
           <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input label="Material Title" value={formData.title} onChange={v => setFormData({...formData, title: v})} required />
-            <Input label="Session Group" type="select" options={SESSIONS} value={formData.sessionGroup} onChange={v => setFormData({...formData, sessionGroup: v})} required />
+            <Input 
+               label="Session Group" 
+               type="select" 
+               options={user.role === 'tutor' ? [user.teachingSession] : SESSIONS} 
+               value={formData.sessionGroup} 
+               onChange={v => setFormData({...formData, sessionGroup: v})} 
+               required 
+               disabled={user.role === 'tutor'}
+            />
             <div className="md:col-span-2">
                <Input label="Link (YouTube / Website)" type="url" value={formData.link} onChange={v => setFormData({...formData, link: v})} placeholder="https://..." required />
             </div>
@@ -4608,10 +5271,19 @@ function MaterialsModule({ db, setDb, generateId, showToast, softDelete, user })
 
 function StudentMaterialsModule({ db, setDb, user, showToast }) {
   const [comment, setComment] = useState({});
+  const [filterMonth, setFilterMonth] = useState<number | string>(new Date().getMonth() + 1);
+  const [filterYear, setFilterYear] = useState(new Date().getFullYear());
 
   const student = db.students.find(s => s.id === user.studentId);
   const myGroup = student ? getSessionGroup(student.class) : '';
-  const myMats = (db.materials || []).filter(m => m.sessionGroup === myGroup).reverse();
+  const myMats = (db.materials || []).filter(m => {
+     if (m.sessionGroup !== myGroup) return false;
+     if (filterMonth !== 'All') {
+        const prefix = `${filterYear}-${String(filterMonth).padStart(2, '0')}`;
+        return m.date.startsWith(prefix);
+     }
+     return m.date.startsWith(String(filterYear));
+  }).reverse();
 
   const handleSubmitComment = (matId, existingSubIdx = -1) => {
     const text = comment[matId]?.trim();
@@ -4621,26 +5293,29 @@ function StudentMaterialsModule({ db, setDb, user, showToast }) {
       const newMats = [...(p.materials || [])];
       const matIdx = newMats.findIndex(m => m.id === matId);
       if (matIdx > -1) {
+        newMats[matIdx] = { ...newMats[matIdx] }; // deep copy material
+        newMats[matIdx].submissions = [...(newMats[matIdx].submissions || [])]; // deep copy submissions
+        
         if (existingSubIdx > -1) {
            // Append reply
-           const sub = newMats[matIdx].submissions[existingSubIdx];
-           sub.replies = [...(sub.replies || []), {
+           newMats[matIdx].submissions[existingSubIdx] = { ...newMats[matIdx].submissions[existingSubIdx] }; // deep copy submission
+           newMats[matIdx].submissions[existingSubIdx].replies = [...(newMats[matIdx].submissions[existingSubIdx].replies || []), {
                senderRole: 'student',
                senderName: student?.name || 'Student',
                text,
                date: new Date().toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })
            }];
-           sub.checked = false; // Mark as unread/unchecked for tutor
+           newMats[matIdx].submissions[existingSubIdx].checked = false; // Mark as unread/unchecked for tutor
         } else {
            // Initial Submission
-           newMats[matIdx].submissions = [...(newMats[matIdx].submissions || []), {
+           newMats[matIdx].submissions.push({
              studentId: student?.id,
              studentName: student?.name || 'Student',
              text,
              date: new Date().toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' }),
              checked: false,
              replies: []
-           }];
+           });
         }
       }
       return { ...p, materials: newMats };
@@ -4652,9 +5327,18 @@ function StudentMaterialsModule({ db, setDb, user, showToast }) {
 
   return (
     <div className="space-y-6">
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold text-white mb-1">My Materials & Tasks</h2>
-        <p className="text-sm text-gray-400">View materials, watch videos, and submit your tasks/comments below.</p>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-white mb-1">My Materials & Tasks</h2>
+          <p className="text-sm text-gray-400">View materials, watch videos, and submit your tasks/comments below.</p>
+        </div>
+        <div className="flex gap-2 w-full sm:w-auto">
+            <select className="bg-[#151B26] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-[#00D4FF] flex-1 sm:flex-none" value={filterMonth} onChange={e => setFilterMonth(e.target.value === 'All' ? 'All' : Number(e.target.value))}>
+              <option value="All">All Months</option>
+              {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+            </select>
+            <input type="number" className="bg-[#151B26] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white w-24 focus:border-[#00D4FF]" value={filterYear} onChange={e => setFilterYear(Number(e.target.value))} />
+        </div>
       </div>
 
       <div className="space-y-6">
