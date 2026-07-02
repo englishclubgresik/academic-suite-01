@@ -1476,11 +1476,24 @@ export default function App() {
 
   // NEW: Ref untuk timer double-click tombol back (Exit App)
   const exitToastTimeout = useRef(null);
+  // PERBAIKAN: Ref untuk memastikan Toast notifikasi tidak bertabrakan hilangnya
+  const toastTimeoutRef = useRef(null);
+  // NEW: Ref untuk mencegah infinite loop saat proses exit browser
+  const isExiting = useRef(false);
 
   // Diangkat ke atas agar bisa digunakan di mana saja termasuk deteksi tombol Back
   const showToast = (msg, type = 'success') => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 3000);
+    // Bersihkan timer lama jika ada notifikasi baru yang masuk
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    
+    // PERBAIKAN: Tambahkan ID unik (Date.now()) agar React memaksa memuat ulang animasi UI-nya
+    setToast({ id: Date.now(), msg, type });
+    
+    // Mulai timer baru
+    toastTimeoutRef.current = setTimeout(() => {
+      setToast(null);
+      toastTimeoutRef.current = null;
+    }, 3000);
   };
 
   // =====================================================================
@@ -1501,33 +1514,56 @@ export default function App() {
 
   // B. Sinkronisasi Tab Aktif dengan URL Hash (Untuk tombol Back HP)
   useEffect(() => {
-    const hash = window.location.hash.replace('#', '');
+    const rawHash = window.location.hash.replace('#', '');
+    const hash = rawHash.split('?')[0]; // Bersihkan URL dari parameter waktu acak
     if (hash && hash !== activeTab) {
       setActiveTab(hash);
     }
   }, []);
 
   useEffect(() => {
-    if (window.location.hash !== `#${activeTab}`) {
+    const currentHashBase = window.location.hash.replace('#', '').split('?')[0];
+    if (currentHashBase !== activeTab) {
       window.history.pushState(null, '', `#${activeTab}`);
     }
   }, [activeTab]);
 
   useEffect(() => {
     const handlePopState = () => {
-      const hash = window.location.hash.replace('#', '');
+      // Jika sistem sedang mengizinkan keluar, abaikan interceptor ini
+      if (isExiting.current) return;
+
+      const rawHash = window.location.hash.replace('#', '');
+      const hash = rawHash.split('?')[0]; // Pisahkan nama menu dari ID unik
+
       if (hash) {
         setActiveTab(hash);
+        // Batal keluar jika user tiba-tiba pindah menu
+        if (exitToastTimeout.current) {
+           clearTimeout(exitToastTimeout.current);
+           exitToastTimeout.current = null;
+        }
       } else {
-        // LOGIKA: Mencegah langsung keluar aplikasi saat tekan Back
+        // LOGIKA: Mencegah langsung keluar aplikasi saat tekan Back dari root
         if (exitToastTimeout.current) {
           // Jika ditekan kedua kalinya dalam 2 detik, izinkan keluar browser/tab
-          window.history.back();
+          isExiting.current = true;
+          clearTimeout(exitToastTimeout.current);
+          exitToastTimeout.current = null;
+          window.history.back(); // Perintah asli keluar dari browser
         } else {
-          // Jika baru ditekan sekali, kembalikan hash ke dashboard & munculkan notifikasi
-          window.history.pushState(null, '', '#dashboard');
+          // 🔥 GOD TIER FIX: Suntikkan Timestamp unik agar Browser Chrome/Safari 
+          // dipaksa menciptakan history entry yang benar-benar baru.
+          window.history.pushState(null, '', `#dashboard?t=${Date.now()}`);
           setActiveTab('dashboard');
-          showToast('Tekan sekali lagi untuk keluar', 'warning');
+          
+          // Eksekusi langsung ke React State Setter
+          if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+          setToast({ id: Date.now(), msg: 'Tekan sekali lagi untuk keluar', type: 'warning' });
+          toastTimeoutRef.current = setTimeout(() => {
+            setToast(null);
+            toastTimeoutRef.current = null;
+          }, 3000);
           
           exitToastTimeout.current = setTimeout(() => {
             exitToastTimeout.current = null;
@@ -2100,7 +2136,7 @@ export default function App() {
       />
 
       {toast && (
-        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-2xl flex items-center gap-2 animate-bounce print:hidden ${
+        <div key={toast.id} className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-2xl flex items-center gap-2 animate-bounce print:hidden ${
             toast.type === 'error' ? 'bg-red-500' : toast.type === 'warning' ? 'bg-yellow-500 text-[#0B0F19]' : 'bg-[#00D4FF] text-[#0B0F19] font-semibold'
         }`}>
           {toast.type === 'error' ? <XCircle size={20} /> : toast.type === 'warning' ? <AlertCircle size={20} /> : <CheckCircle2 size={20} />}
