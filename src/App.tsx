@@ -1456,8 +1456,30 @@ export default function App() {
 
   const [db, setDb] = useState(defaultDbStructure);
 
-  const [currentUser, setCurrentUser] = useState(null);
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [currentUser, setCurrentUser] = useState(() => {
+    const saved = sessionStorage.getItem('ecg_active_session');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        // Normalisasi role agar tidak terjadi blank page jika user adalah super admin
+        if (String(parsed.role).toLowerCase().includes('super')) {
+           parsed.role = 'admin';
+           parsed.isSuperAdmin = true;
+        }
+        return parsed;
+      } catch (e) {
+        sessionStorage.removeItem('ecg_active_session');
+        return null;
+      }
+    }
+    return null;
+  });
+  
+  const [activeTab, setActiveTab] = useState(() => {
+    const hash = window.location.hash.replace('#', '').split('?')[0];
+    return hash && hash !== 'dashboard' ? hash : 'dashboard';
+  });
+  
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [toast, setToast] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
@@ -1500,19 +1522,12 @@ export default function App() {
   // PERBAIKAN 1 & 2: MANAJEMEN SESI (REFRESH) & TOMBOL BACK DI MOBILE
   // =====================================================================
   
-  // A. Auto Login saat Refresh (Ambil sesi dari localStorage)
-  useEffect(() => {
-    const savedSession = localStorage.getItem('ecg_active_session');
-    if (savedSession) {
-      try {
-        setCurrentUser(JSON.parse(savedSession));
-      } catch (e) {
-        localStorage.removeItem('ecg_active_session');
-      }
-    }
-  }, []);
-
   // B. Sinkronisasi Tab Aktif dengan URL Hash (Untuk tombol Back HP)
+  const activeTabRef = useRef(activeTab);
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+
   useEffect(() => {
     const rawHash = window.location.hash.replace('#', '');
     const hash = rawHash.split('?')[0]; // Bersihkan URL dari parameter waktu acak
@@ -1530,34 +1545,29 @@ export default function App() {
 
   useEffect(() => {
     const handlePopState = () => {
-      // Jika sistem sedang mengizinkan keluar, abaikan interceptor ini
       if (isExiting.current) return;
 
-      const rawHash = window.location.hash.replace('#', '');
-      const hash = rawHash.split('?')[0]; // Pisahkan nama menu dari ID unik
-
-      if (hash) {
-        setActiveTab(hash);
-        // Batal keluar jika user tiba-tiba pindah menu
+      // LOGIKA BARU: Jika user menekan tombol Back SAAT SEDANG berada di Dashboard
+      if (activeTabRef.current === 'dashboard') {
         if (exitToastTimeout.current) {
-           clearTimeout(exitToastTimeout.current);
-           exitToastTimeout.current = null;
-        }
-      } else {
-        // LOGIKA: Mencegah langsung keluar aplikasi saat tekan Back dari root
-        if (exitToastTimeout.current) {
-          // Jika ditekan kedua kalinya dalam 2 detik, izinkan keluar browser/tab
-          isExiting.current = true;
+          // KETUKAN KEDUA: Logout dan kembali ke Login (keluar aplikasi)
           clearTimeout(exitToastTimeout.current);
           exitToastTimeout.current = null;
-          window.history.back(); // Perintah asli keluar dari browser
-        } else {
-          // 🔥 GOD TIER FIX: Suntikkan Timestamp unik agar Browser Chrome/Safari 
-          // dipaksa menciptakan history entry yang benar-benar baru.
-          window.history.pushState(null, '', `#dashboard?t=${Date.now()}`);
-          setActiveTab('dashboard');
           
-          // Eksekusi langsung ke React State Setter
+          sessionStorage.removeItem('ecg_active_session');
+          localStorage.removeItem('ecg_remembered_user');
+          setCurrentUser(null);
+          setActiveTab('dashboard');
+          window.location.hash = '';
+          
+          if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+          setToast(null);
+          return;
+        } else {
+          // KETUKAN PERTAMA: Tahan di dashboard dan munculkan peringatan
+          // (PushState mengembalikan posisi URL ke dashboard untuk membatalkan back default)
+          window.history.pushState(null, '', '#dashboard');
+          
           if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
           setToast({ id: Date.now(), msg: 'Tekan sekali lagi untuk keluar', type: 'warning' });
           toastTimeoutRef.current = setTimeout(() => {
@@ -1568,12 +1578,35 @@ export default function App() {
           exitToastTimeout.current = setTimeout(() => {
             exitToastTimeout.current = null;
           }, 2000); // Reset peringatan setelah 2 detik
+          return;
         }
+      }
+
+      // Jika user BUKAN di dashboard (misal di Students), biarkan back berjalan kembali ke menu/dashboard sebelumnya
+      const rawHash = window.location.hash.replace('#', '');
+      const hash = rawHash.split('?')[0];
+
+      if (hash && hash !== 'dashboard') {
+        setActiveTab(hash);
+        if (exitToastTimeout.current) {
+           clearTimeout(exitToastTimeout.current);
+           exitToastTimeout.current = null;
+        }
+      } else {
+        setActiveTab('dashboard');
       }
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  // PATCH 3: CLEAR TOAST TIMEOUT SAAT PINDAH MENU
+  useEffect(() => {
+    if (activeTab !== 'dashboard' && exitToastTimeout.current) {
+      clearTimeout(exitToastTimeout.current);
+      exitToastTimeout.current = null;
+    }
+  }, [activeTab]);
   // =====================================================================
 
   // Set browser tab title
@@ -1604,6 +1637,21 @@ export default function App() {
              };
           });
        }
+       
+       // PERBAIKAN: Pastikan Super Admin SELALU ada di database meskipun data Cloud kosong
+       const hasSuperAdmin = norm.users.some(u => (u.username || '').toLowerCase() === 'admin' || String(u.role).toLowerCase().includes('super'));
+       if (!hasSuperAdmin) {
+          norm.users.unshift({
+             id: 'ADM-FALLBACK',
+             username: 'admin',
+             password: 'password',
+             role: 'super admin',
+             name: 'Super Admin',
+             active: 'Active',
+             mustChangePassword: false
+          });
+       }
+       
        return norm;
     };
 
@@ -1827,7 +1875,7 @@ export default function App() {
         id: 'ADM-FALLBACK',
         username: 'admin',
         password: 'password',
-        role: 'admin',
+        role: 'super admin',
         name: 'Super Admin',
         active: 'Active',
       };
@@ -1841,23 +1889,26 @@ export default function App() {
     }
 
     if (appUser) {
+      // Normalisasi izin UI untuk Super Admin
+      const sessionUser = { ...appUser };
+      if (String(sessionUser.role).toLowerCase().includes('super')) {
+         sessionUser.role = 'admin';
+         sessionUser.isSuperAdmin = true;
+      }
+
       if (rememberMe) localStorage.setItem('ecg_remembered_user', JSON.stringify({ username: cleanUser, password: cleanPass }));
       else localStorage.removeItem('ecg_remembered_user');
       
-      // PERBAIKAN 1: Simpan sesi aktif ke localStorage agar tidak logout saat di-refresh
-      localStorage.setItem('ecg_active_session', JSON.stringify(appUser));
-      
-      setCurrentUser(appUser);
-      showToast(`Welcome back, ${appUser.name}`);
+      sessionStorage.setItem('ecg_active_session', JSON.stringify(sessionUser));
+      setCurrentUser(sessionUser);
+      showToast(`Welcome back, ${sessionUser.name}`);
       return true;
     } else if (tutor) {
       if (rememberMe) localStorage.setItem('ecg_remembered_user', JSON.stringify({ username: cleanUser, password: cleanPass }));
       else localStorage.removeItem('ecg_remembered_user');
       
-      // PERBAIKAN 1: Simpan sesi aktif ke localStorage agar tidak logout saat di-refresh
       const tutorSession = { ...tutor, role: 'tutor' };
-      localStorage.setItem('ecg_active_session', JSON.stringify(tutorSession));
-      
+      sessionStorage.setItem('ecg_active_session', JSON.stringify(tutorSession));
       setCurrentUser(tutorSession);
       showToast(`Welcome back, ${tutor.name}`);
       return true;
@@ -1871,8 +1922,9 @@ export default function App() {
   };
 
   const confirmLogout = () => {
-    // PERBAIKAN 1: Hapus sesi dari localStorage saat logout manual
-    localStorage.removeItem('ecg_active_session');
+    // PATCH 2: Hapus semua sesi dari storage saat logout
+    sessionStorage.removeItem('ecg_active_session');
+    localStorage.removeItem('ecg_remembered_user');
     
     setCurrentUser(null);
     setActiveTab('dashboard');
@@ -2225,18 +2277,19 @@ export default function App() {
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden print:w-full print:absolute print:inset-0 print:bg-white print:text-black print:overflow-visible">
-        <header className="md:hidden flex items-center justify-between p-4 bg-[#0A0E17] border-b border-gray-800 print:hidden sticky top-0 z-30">
-          <h2 className="font-bold text-[#00D4FF] tracking-wide">ECG Academic Suite</h2>
-          <button onClick={() => setSidebarOpen(true)} className="text-gray-300 hover:text-white transition-colors">
-            <Menu size={24} />
-          </button>
-        </header>
-        <main className="flex-1 overflow-y-auto p-4 md:p-8 custom-scrollbar print:overflow-visible print:p-0">
-          
-          {/* ADDED: UNIVERSAL BACK TO DASHBOARD BUTTON */}
-          {activeTab !== 'dashboard' && (
-            <div className="sticky top-[-16px] md:top-[-32px] z-40 bg-[#0B0F19]/95 backdrop-blur-md pt-4 md:pt-8 pb-4 -mt-4 md:-mt-8 mb-6 border-b border-gray-800/80 print:hidden w-full max-w-7xl mx-auto">
+      <main className="flex-1 overflow-y-auto p-4 md:p-8 pt-8 md:pt-12 relative custom-scrollbar">
+          {/* PATCH 4: CONDITIONAL DASHBOARD BACK BUTTON / EXIT BUTTON */}
+          <div className="sticky top-[-16px] md:top-[-32px] z-40 bg-[#0B0F19]/95 backdrop-blur-md pt-4 md:pt-8 pb-4 -mt-4 md:-mt-8 mb-6 border-b border-gray-800/80 print:hidden w-full max-w-7xl mx-auto">
+            {activeTab === 'dashboard' ? (
+              <Button
+                variant="danger"
+                onClick={handleLogout}
+                icon={LogOut}
+                className="w-full md:w-max min-h-[44px] flex items-center justify-center bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-500 hover:text-red-400 transition-all shadow-md rounded-xl px-6 font-semibold tracking-wide"
+              >
+                Exit App
+              </Button>
+            ) : (
               <Button
                 variant="secondary"
                 onClick={() => setActiveTab('dashboard')}
@@ -2245,15 +2298,14 @@ export default function App() {
               >
                 Back to Dashboard
               </Button>
-            </div>
-          )}
-          {/* END OF ADDITION */}
+            )}
+          </div>
+          {/* END OF PATCH 4 */}
 
           <div className="max-w-7xl mx-auto space-y-6 print:max-w-full print:space-y-0">
             {renderContent()}
           </div>
         </main>
-      </div>
     </div>
   );
 }
@@ -4301,44 +4353,43 @@ function HistoryReportsModule({ db, setDb, showToast, handlePrint, user }) {
 
 // MODULE UNTUK BUAT AKUN TERMASUK SISWA
 function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm }) {
-  const [formData, setFormData] = useState({ name: '', username: '', password: '', role: 'admin', active: 'Active', studentId: '', teachingSession: '' });
+  const [formData, setFormData] = useState({ name: '', username: '', password: '', role: 'admin', active: 'Active', studentId: '', tutorId: '', teachingSession: '' });
   const [isEditingId, setIsEditingId] = useState(null);
   const [resetDialog, setResetDialog] = useState(null);
   const [newPassword, setNewPassword] = useState('');
 
-  const activeStudents = db.students.filter(s => s.status === 'Active');
+  const activeStudentsWithoutAccount = db.students.filter(s => s.status === 'Active' && !db.users.some(u => u.role === 'student' && u.studentId === s.id));
+  const activeTutorsWithoutAccount = db.tutors.filter(t => t.status === 'Active' && (!t.username || !t.password));
 
   const handleSave = (e) => {
     e.preventDefault();
-    if (formData.role === 'admin') {
-      const rec = { ...formData, id: isEditingId || generateId('ADM', 'users') };
-      setDb((p) => ({ ...p, users: isEditingId ? p.users.map((u) => (u.id === isEditingId ? rec : u)) : [...p.users, rec] }));
+    if (formData.role === 'tutor') {
+      if (!isEditingId && !formData.tutorId) return showToast('Please select a tutor to link', 'error');
+      const targetId = isEditingId || formData.tutorId;
+      setDb((p) => ({ 
+        ...p, 
+        tutors: p.tutors.map((t) => (t.id === targetId ? { ...t, username: formData.username, password: formData.password, status: formData.active } : t)) 
+      }));
     } else if (formData.role === 'student') {
       if (!formData.studentId) return showToast('Please select a student to link', 'error');
-      // PERBAIKAN: Fallback jika student yang di-link sudah dihapus dari direktori
       const linkedStudent = db.students.find(s => s.id === formData.studentId) || { name: formData.name };
-      // Untuk student yang baru dibuat, paksa ganti password di awal
       const rec = { ...formData, name: linkedStudent.name, id: isEditingId || generateId('USR', 'users'), mustChangePassword: !isEditingId };
       setDb((p) => ({ ...p, users: isEditingId ? p.users.map((u) => (u.id === isEditingId ? rec : u)) : [...p.users, rec] }));
     } else {
-      // PERBAIKAN KRITIS: Jangan menimpa (override) teachingSession milik tutor kembali ke SESSIONS[0] saat diedit
-      const rec = { 
-         ...formData, 
-         id: isEditingId || generateId('TUT', 'tutors'), 
-         status: formData.active, 
-         teachingSession: formData.teachingSession || SESSIONS[0] 
-      };
-      setDb((p) => ({ ...p, tutors: isEditingId ? p.tutors.map((t) => (t.id === isEditingId ? rec : t)) : [...p.tutors, rec] }));
+      // ADMIN / SUPER ADMIN (Fallback aman untuk setiap role selain student dan tutor)
+      const rec = { ...formData, id: isEditingId || generateId('ADM', 'users') };
+      setDb((p) => ({ ...p, users: isEditingId ? p.users.map((u) => (u.id === isEditingId ? rec : u)) : [...p.users, rec] }));
     }
     showToast('User Saved');
     setIsEditingId(null);
-    setFormData({ name: '', username: '', password: '', role: 'admin', active: 'Active', studentId: '', teachingSession: '' });
+    setFormData({ name: '', username: '', password: '', role: 'admin', active: 'Active', studentId: '', tutorId: '', teachingSession: '' });
   };
 
   const handleResetPassword = (e) => {
     e.preventDefault();
     if(!newPassword) return showToast('Please enter a new password', 'warning');
-    if (resetDialog.role === 'admin' || resetDialog.role === 'student') {
+    // Pastikan reset password aman meskipun role-nya superadmin
+    if (resetDialog.role !== 'tutor') {
       setDb(p => ({...p, users: p.users.map(u => u.id === resetDialog.id ? {...u, password: newPassword} : u)}));
     } else {
       setDb(p => ({...p, tutors: p.tutors.map(t => t.id === resetDialog.id ? {...t, password: newPassword} : t)}));
@@ -4351,7 +4402,8 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
   const handleDeleteUser = (id, role, name) => {
     const targetUser = db.users.find(u => u.id === id);
     
-    if (targetUser && targetUser.role === 'admin' && (targetUser.username || '').toLowerCase() === 'admin') {
+    // Perlindungan lapis ganda agar admin dan super admin tidak bisa dihapus dari sistem
+    if (targetUser && ((targetUser.username || '').toLowerCase() === 'admin' || String(targetUser.role).toLowerCase().includes('super'))) {
       showToast('Primary Super Admin cannot be deleted.', 'error');
       return;
     }
@@ -4360,7 +4412,7 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
       'Confirm Deletion',
       `Are you sure you want to delete ${name}? This action cannot be undone.`,
       () => {
-        if (role === 'admin' || role === 'student') {
+        if (role !== 'tutor') {
           setDb(p => ({ ...p, users: p.users.filter(u => u.id !== id) }));
         } else {
           setDb(p => ({ ...p, tutors: p.tutors.filter(t => t.id !== id) }));
@@ -4392,12 +4444,15 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
       <Card>
         <h3 className="text-lg font-bold text-white mb-4">{isEditingId ? 'Edit User' : 'Create User'}</h3>
         <form onSubmit={handleSave} className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <Input label="Role" type="select" options={['admin', 'tutor', 'student']} value={formData.role} onChange={(v) => setFormData({ ...formData, role: v })} required disabled={isEditingId !== null} />
+          {/* PERBAIKAN: Menyembunyikan "Super Admin" dari dropdown saat membuat user baru */}
+          <Input label="Role" type="select" options={formData.role === 'super admin' ? ['super admin', 'admin', 'tutor', 'student'] : ['admin', 'tutor', 'student']} value={formData.role} onChange={(v) => setFormData({ ...formData, role: v })} required disabled={isEditingId !== null} />
           
           {formData.role === 'student' && !isEditingId ? (
-             <Input label="Link to Student" type="select" options={activeStudents.map(s => ({ value: s.id, label: `${s.name} (${s.class})` }))} value={formData.studentId} onChange={(v) => setFormData({ ...formData, studentId: v })} required />
+             <Input label="Link to Student" type="select" options={activeStudentsWithoutAccount.map(s => ({ value: s.id, label: `${s.name} (${s.class})` }))} value={formData.studentId} onChange={(v) => setFormData({ ...formData, studentId: v })} required />
+          ) : formData.role === 'tutor' && !isEditingId ? (
+             <Input label="Link to Tutor" type="select" options={activeTutorsWithoutAccount.map(t => ({ value: t.id, label: t.name }))} value={formData.tutorId} onChange={(v) => setFormData({ ...formData, tutorId: v })} required />
           ) : (
-             <Input label="Full Name" value={formData.name} onChange={(v) => setFormData({ ...formData, name: v })} required disabled={formData.role === 'student'} />
+             <Input label="Full Name" value={formData.name} onChange={(v) => setFormData({ ...formData, name: v })} required disabled={formData.role === 'student' || formData.role === 'tutor'} />
           )}
 
           <Input label="Username" value={formData.username} onChange={(v) => setFormData({ ...formData, username: v })} required />
@@ -4405,7 +4460,7 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
           <Input label="Status" type="select" options={['Active', 'Inactive']} value={formData.active} onChange={(v) => setFormData({ ...formData, active: v })} required />
           
           <div className="col-span-2 md:col-span-5 flex justify-center gap-2">
-            {isEditingId && <Button variant="ghost" onClick={() => { setIsEditingId(null); setFormData({ name: '', username: '', password: '', role: 'admin', active: 'Active', studentId: '', teachingSession: '' }); }}>Cancel</Button>}
+            {isEditingId && <Button variant="ghost" onClick={() => { setIsEditingId(null); setFormData({ name: '', username: '', password: '', role: 'admin', active: 'Active', studentId: '', tutorId: '', teachingSession: '' }); }}>Cancel</Button>}
             <Button type="submit">Save Account</Button>
           </div>
         </form>
@@ -4417,8 +4472,9 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
             <tr><th className="p-4 text-center">Role</th><th className="p-4 text-center">Name</th><th className="p-4 text-center">Username</th><th className="p-4 text-center">Password</th><th className="p-4 text-center">Status</th><th className="p-4 text-center">Actions</th></tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {db.users.filter(u => u.role === 'admin').map((u, idx) => {
-              const isSuperAdmin = (u.username || '').toLowerCase() === 'admin';
+            {db.users.filter(u => u.role !== 'student').map((u, idx) => {
+              // Validasi yang lebih luwes untuk mendeteksi Super Admin
+              const isSuperAdmin = (u.username || '').toLowerCase() === 'admin' || String(u.role).toLowerCase().includes('super');
               return (
                 <tr key={`admin-${u.id}-${idx}`} className="hover:bg-[#0B0F19]">
                   <td className={`p-4 text-center text-xs font-bold uppercase ${isSuperAdmin ? 'text-red-500' : 'text-blue-400'}`}>
@@ -4440,24 +4496,78 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
                 </tr>
               );
             })}
-            {db.tutors.map((t, idx) => (
-              <tr key={`tutor-${t.id}-${idx}`} className="hover:bg-[#0B0F19]">
-                <td className="p-4 text-center text-xs font-bold uppercase text-purple-400">Tutor</td>
-                <td className="p-4 text-center text-white">{t.name}</td>
-                <td className="p-4 text-center">{t.username}</td>
-                <td className="p-4 text-center font-mono text-gray-400">{t.password}</td>
-                <td className="p-4 text-center"><Badge status={t.status} /></td>
-                <td className="p-4 text-center flex justify-center gap-2">
-                  <button onClick={() => { setFormData({ ...t, role: 'tutor', active: t.status }); setIsEditingId(t.id); const contentEl = document.querySelector('main'); setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50); }} className="text-blue-400 p-1" title="Edit Profile"><Edit2 size={16} /></button>
-                  <button onClick={() => { setResetDialog({ id: t.id, role: 'tutor', name: t.name }); }} className="text-yellow-500 p-1" title="Reset Password"><KeyRound size={16} /></button>
-                  <button onClick={() => handleDeleteUser(t.id, 'tutor', t.name)} className="text-red-500 p-1" title="Delete User"><Trash2 size={16} /></button>
-                </td>
-              </tr>
-            ))}
-            {db.users.filter(u => u.role === 'student').map((u, idx) => (
-              <tr key={`student-${u.id}-${idx}`} className="hover:bg-[#0B0F19]">
-                <td className="p-4 text-center text-xs font-bold uppercase text-blue-400">Student</td>
-                <td className="p-4 text-center text-white">{u.name}</td>
+            {db.tutors.map((t, idx) => {
+              const hasAccount = t.username && t.password;
+              return (
+                <tr key={`tutor-${t.id}-${idx}`} className="hover:bg-[#0B0F19]">
+                  <td className="p-4 text-center text-xs font-bold uppercase text-purple-400">Tutor</td>
+                  <td className="p-4 text-center text-white">{t.name}</td>
+                  <td className="p-4 text-center">{hasAccount ? t.username : <span className="text-gray-600 text-xs italic">No Account</span>}</td>
+                  <td className="p-4 text-center font-mono text-gray-400">{hasAccount ? t.password : '-'}</td>
+                  <td className="p-4 text-center">
+                    {hasAccount ? <Badge status={t.status} /> : <span className="px-2.5 py-1 text-xs font-medium rounded-full border bg-gray-500/10 text-gray-400 border-gray-500/20 whitespace-nowrap">No Account</span>}
+                  </td>
+                  <td className="p-4 text-center flex justify-center gap-2">
+                    <button onClick={() => { 
+                      if (hasAccount) {
+                        setFormData({ ...t, role: 'tutor', active: t.status, tutorId: t.id, studentId: '' }); 
+                        setIsEditingId(t.id);
+                      } else {
+                        // Jika belum punya akun, klik edit akan auto-fill form pembuatan akun
+                        setFormData({ name: t.name, username: t.name.toLowerCase().replace(/[^a-z0-9]/g, ''), password: 'ecg' + new Date().getFullYear(), role: 'tutor', active: t.status || 'Active', tutorId: t.id, studentId: '', teachingSession: t.teachingSession || '' });
+                        setIsEditingId(null); 
+                      }
+                      const contentEl = document.querySelector('main'); setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50); 
+                    }} className="text-blue-400 p-1" title={hasAccount ? "Edit Account" : "Create Account"}><Edit2 size={16} /></button>
+                    {hasAccount && (
+                      <>
+                        <button onClick={() => { setResetDialog({ id: t.id, role: 'tutor', name: t.name }); }} className="text-yellow-500 p-1" title="Reset Password"><KeyRound size={16} /></button>
+                        <button onClick={() => handleDeleteUser(t.id, 'tutor', t.name)} className="text-red-500 p-1" title="Delete User"><Trash2 size={16} /></button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {/* PERBAIKAN: Menampilkan seluruh profil murid dari direktori dan mencocokkannya dengan akun mereka */}
+            {db.students.map((s, idx) => {
+              const userAcc = db.users.find(u => u.role === 'student' && (u.studentId === s.id || u.name === s.name));
+              return (
+                <tr key={`student-dir-${s.id}-${idx}`} className="hover:bg-[#0B0F19]">
+                  <td className="p-4 text-center text-xs font-bold uppercase text-blue-400">Student</td>
+                  <td className="p-4 text-center text-white">{s.name}</td>
+                  <td className="p-4 text-center">{userAcc ? userAcc.username : <span className="text-gray-600 text-xs italic">No Account</span>}</td>
+                  <td className="p-4 text-center font-mono text-gray-400">{userAcc ? userAcc.password : '-'}</td>
+                  <td className="p-4 text-center">
+                    {userAcc ? <Badge status={userAcc.active} /> : <span className="px-2.5 py-1 text-xs font-medium rounded-full border bg-gray-500/10 text-gray-400 border-gray-500/20 whitespace-nowrap">No Account</span>}
+                  </td>
+                  <td className="p-4 text-center flex justify-center gap-2">
+                    <button onClick={() => { 
+                      if (userAcc) {
+                        setFormData({ tutorId: '', teachingSession: '', ...userAcc, studentId: s.id }); 
+                        setIsEditingId(userAcc.id);
+                      } else {
+                        // Jika belum punya akun, klik edit akan auto-fill form pembuatan akun
+                        setFormData({ name: s.name, username: s.name.toLowerCase().replace(/[^a-z0-9]/g, ''), password: 'ecg' + new Date().getFullYear(), role: 'student', active: 'Active', studentId: s.id, tutorId: '', teachingSession: '' });
+                        setIsEditingId(null);
+                      }
+                      const contentEl = document.querySelector('main'); setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50); 
+                    }} className="text-blue-400 p-1" title={userAcc ? "Edit Account" : "Create Account"}><Edit2 size={16} /></button>
+                    {userAcc && (
+                      <>
+                        <button onClick={() => { setResetDialog({ id: userAcc.id, role: userAcc.role, name: userAcc.name }); }} className="text-yellow-500 p-1" title="Reset Password"><KeyRound size={16} /></button>
+                        <button onClick={() => handleDeleteUser(userAcc.id, userAcc.role, userAcc.name)} className="text-red-500 p-1" title="Delete Account"><Trash2 size={16} /></button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {/* Menampilkan akun murid yang terputus tautannya dari direktori (sebagai tindakan pencegahan) */}
+            {db.users.filter(u => u.role === 'student' && !db.students.some(s => s.id === u.studentId || s.name === u.name)).map((u, idx) => (
+              <tr key={`student-orphan-${u.id}-${idx}`} className="hover:bg-[#0B0F19]">
+                <td className="p-4 text-center text-xs font-bold uppercase text-blue-400">Student <span className="text-red-500">*</span></td>
+                <td className="p-4 text-center text-white">{u.name} <span className="text-[10px] block text-red-400">(Unlinked)</span></td>
                 <td className="p-4 text-center">{u.username}</td>
                 <td className="p-4 text-center font-mono text-gray-400">{u.password}</td>
                 <td className="p-4 text-center"><Badge status={u.active} /></td>
