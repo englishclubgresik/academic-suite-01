@@ -1474,11 +1474,71 @@ export default function App() {
   // NEW: Ref untuk melacak versi database (Version Control & Anti-Conflict)
   const dbVersion = useRef(null);
 
-  // Diangkat ke atas agar bisa digunakan di dalam useEffect sinkronisasi
+  // NEW: Ref untuk timer double-click tombol back (Exit App)
+  const exitToastTimeout = useRef(null);
+
+  // Diangkat ke atas agar bisa digunakan di mana saja termasuk deteksi tombol Back
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
   };
+
+  // =====================================================================
+  // PERBAIKAN 1 & 2: MANAJEMEN SESI (REFRESH) & TOMBOL BACK DI MOBILE
+  // =====================================================================
+  
+  // A. Auto Login saat Refresh (Ambil sesi dari localStorage)
+  useEffect(() => {
+    const savedSession = localStorage.getItem('ecg_active_session');
+    if (savedSession) {
+      try {
+        setCurrentUser(JSON.parse(savedSession));
+      } catch (e) {
+        localStorage.removeItem('ecg_active_session');
+      }
+    }
+  }, []);
+
+  // B. Sinkronisasi Tab Aktif dengan URL Hash (Untuk tombol Back HP)
+  useEffect(() => {
+    const hash = window.location.hash.replace('#', '');
+    if (hash && hash !== activeTab) {
+      setActiveTab(hash);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (window.location.hash !== `#${activeTab}`) {
+      window.history.pushState(null, '', `#${activeTab}`);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const hash = window.location.hash.replace('#', '');
+      if (hash) {
+        setActiveTab(hash);
+      } else {
+        // LOGIKA: Mencegah langsung keluar aplikasi saat tekan Back
+        if (exitToastTimeout.current) {
+          // Jika ditekan kedua kalinya dalam 2 detik, izinkan keluar browser/tab
+          window.history.back();
+        } else {
+          // Jika baru ditekan sekali, kembalikan hash ke dashboard & munculkan notifikasi
+          window.history.pushState(null, '', '#dashboard');
+          setActiveTab('dashboard');
+          showToast('Tekan sekali lagi untuk keluar', 'warning');
+          
+          exitToastTimeout.current = setTimeout(() => {
+            exitToastTimeout.current = null;
+          }, 2000); // Reset peringatan setelah 2 detik
+        }
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+  // =====================================================================
 
   // Set browser tab title
   useEffect(() => {
@@ -1747,13 +1807,22 @@ export default function App() {
     if (appUser) {
       if (rememberMe) localStorage.setItem('ecg_remembered_user', JSON.stringify({ username: cleanUser, password: cleanPass }));
       else localStorage.removeItem('ecg_remembered_user');
+      
+      // PERBAIKAN 1: Simpan sesi aktif ke localStorage agar tidak logout saat di-refresh
+      localStorage.setItem('ecg_active_session', JSON.stringify(appUser));
+      
       setCurrentUser(appUser);
       showToast(`Welcome back, ${appUser.name}`);
       return true;
     } else if (tutor) {
       if (rememberMe) localStorage.setItem('ecg_remembered_user', JSON.stringify({ username: cleanUser, password: cleanPass }));
       else localStorage.removeItem('ecg_remembered_user');
-      setCurrentUser({ ...tutor, role: 'tutor' });
+      
+      // PERBAIKAN 1: Simpan sesi aktif ke localStorage agar tidak logout saat di-refresh
+      const tutorSession = { ...tutor, role: 'tutor' };
+      localStorage.setItem('ecg_active_session', JSON.stringify(tutorSession));
+      
+      setCurrentUser(tutorSession);
       showToast(`Welcome back, ${tutor.name}`);
       return true;
     } else {
@@ -1766,8 +1835,12 @@ export default function App() {
   };
 
   const confirmLogout = () => {
+    // PERBAIKAN 1: Hapus sesi dari localStorage saat logout manual
+    localStorage.removeItem('ecg_active_session');
+    
     setCurrentUser(null);
     setActiveTab('dashboard');
+    window.location.hash = ''; // Bersihkan URL Hash
     setLogoutConfirm(false);
     sonnerToast.success('You have successfully logged out');
   };
@@ -4315,11 +4388,16 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
                   <td className={`p-4 text-center text-xs font-bold uppercase ${isSuperAdmin ? 'text-red-500' : 'text-blue-400'}`}>
                     {isSuperAdmin ? 'Super Admin' : 'Admin'}
                   </td>
-                  <td className="p-4 text-center text-white">{u.name}</td><td className="p-4 text-center">{u.username}</td><td className="p-4 text-center text-gray-500">****</td><td className="p-4 text-center"><Badge status={u.active} /></td>
+                  <td className="p-4 text-center text-white">{u.name}</td>
+                  <td className="p-4 text-center">{u.username}</td>
+                  <td className="p-4 text-center font-mono text-gray-400">{u.password}</td>
+                  <td className="p-4 text-center"><Badge status={u.active} /></td>
                   <td className="p-4 text-center flex justify-center gap-2">
                     <button onClick={() => { setFormData({ ...u }); setIsEditingId(u.id); const contentEl = document.querySelector('main'); setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50); }} className="text-blue-400 p-1" title="Edit Profile"><Edit2 size={16} /></button>
                     <button onClick={() => { setResetDialog({ id: u.id, role: u.role, name: u.name }); }} className="text-yellow-500 p-1" title="Reset Password"><KeyRound size={16} /></button>
-                    {!isSuperAdmin && (
+                    {isSuperAdmin ? (
+                      <button onClick={() => showToast('Primary Super Admin is protected and cannot be deleted.', 'error')} className="text-emerald-500 p-1" title="Protected Account"><ShieldCheck size={16} /></button>
+                    ) : (
                       <button onClick={() => handleDeleteUser(u.id, u.role, u.name)} className="text-red-500 p-1" title="Delete User"><Trash2 size={16} /></button>
                     )}
                   </td>
@@ -4329,7 +4407,10 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
             {db.tutors.map((t, idx) => (
               <tr key={`tutor-${t.id}-${idx}`} className="hover:bg-[#0B0F19]">
                 <td className="p-4 text-center text-xs font-bold uppercase text-purple-400">Tutor</td>
-                <td className="p-4 text-center text-white">{t.name}</td><td className="p-4 text-center">{t.username}</td><td className="p-4 text-center text-gray-500">****</td><td className="p-4 text-center"><Badge status={t.status} /></td>
+                <td className="p-4 text-center text-white">{t.name}</td>
+                <td className="p-4 text-center">{t.username}</td>
+                <td className="p-4 text-center font-mono text-gray-400">{t.password}</td>
+                <td className="p-4 text-center"><Badge status={t.status} /></td>
                 <td className="p-4 text-center flex justify-center gap-2">
                   <button onClick={() => { setFormData({ ...t, role: 'tutor', active: t.status }); setIsEditingId(t.id); const contentEl = document.querySelector('main'); setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50); }} className="text-blue-400 p-1" title="Edit Profile"><Edit2 size={16} /></button>
                   <button onClick={() => { setResetDialog({ id: t.id, role: 'tutor', name: t.name }); }} className="text-yellow-500 p-1" title="Reset Password"><KeyRound size={16} /></button>
@@ -4340,7 +4421,10 @@ function SettingsModule({ db, setDb, generateId, user, showToast, requestConfirm
             {db.users.filter(u => u.role === 'student').map((u, idx) => (
               <tr key={`student-${u.id}-${idx}`} className="hover:bg-[#0B0F19]">
                 <td className="p-4 text-center text-xs font-bold uppercase text-blue-400">Student</td>
-                <td className="p-4 text-center text-white">{u.name}</td><td className="p-4 text-center">{u.username}</td><td className="p-4 text-center text-gray-500">****</td><td className="p-4 text-center"><Badge status={u.active} /></td>
+                <td className="p-4 text-center text-white">{u.name}</td>
+                <td className="p-4 text-center">{u.username}</td>
+                <td className="p-4 text-center font-mono text-gray-400">{u.password}</td>
+                <td className="p-4 text-center"><Badge status={u.active} /></td>
                 <td className="p-4 text-center flex justify-center gap-2">
                   <button onClick={() => { setFormData({ ...u }); setIsEditingId(u.id); const contentEl = document.querySelector('main'); setTimeout(() => { contentEl?.scrollTo({ top: 0, behavior: 'smooth' }); }, 50); }} className="text-blue-400 p-1" title="Edit Profile"><Edit2 size={16} /></button>
                   <button onClick={() => { setResetDialog({ id: u.id, role: u.role, name: u.name }); }} className="text-yellow-500 p-1" title="Reset Password"><KeyRound size={16} /></button>
