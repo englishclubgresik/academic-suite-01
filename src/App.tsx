@@ -58,7 +58,7 @@ import {
 } from 'lucide-react';
 
 // Link Eksekusi Google App Script Anda
-const APPSCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyWb5EGOFzLJQwsAmwWvOLXQiUS2IemmL9IlYMMBkDYufhhFNhmsrcfpTmbTrHHD0Mi/exec';
+const APPSCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxifJu9C9EbCLAVGGL5tTO3KY-p_Tv7cz7RiqediEKktyu6EM4IjYgBdGvqZV7ssnhKuw/exec';
 
 // KREDENSIAL API KEY NEXUS PRIME ENGINE
 const API_KEY = 'ecg_secure_key_2026';
@@ -1547,14 +1547,13 @@ export default function App() {
            throw new Error(data.message || 'Internal Server Error dari AppScript');
         }
 
-        const cloudDb = data.payload || data.state_data || data; 
-          
-        // NEW: Ambil _dbVersion dari Cloud dan hapus dari payload data untuk mencegah tercampur
-        if (cloudDb && cloudDb._dbVersion) {
-           dbVersion.current = cloudDb._dbVersion;
-           delete cloudDb._dbVersion;
+        // NEW: Ambil _dbVersion dari root level response (sesuai struktur AppScript)
+        if (data && data._dbVersion) {
+           dbVersion.current = data._dbVersion;
         }
 
+        const cloudDb = data.payload || data.state_data || data; 
+          
         if (cloudDb && Array.isArray(cloudDb.users)) {
           skipCloudSave.current = true;
           const mergedData = normalizeData(cloudDb);
@@ -1587,15 +1586,18 @@ export default function App() {
       // Sinkronisasi ke Google App Script (Dilengkapi API Key & DB Version)
       fetch(APPSCRIPT_URL, {
         method: 'POST',
-        // WAJIB: Gunakan text/plain untuk menghindari pemblokiran CORS Preflight (OPTIONS)
+        // WAJIB 1: Gunakan text/plain untuk menghindari pemblokiran CORS Preflight (OPTIONS)
         headers: {
           'Content-Type': 'text/plain;charset=utf-8',
         },
+        // WAJIB 2: Google Apps Script melakukan 302 Redirect setelah POST. Browser harus mengikutinya.
+        redirect: 'follow',
         // Membungkus data sesuai struktur baru NEXUS PRIME ENGINE
         body: JSON.stringify({ 
           action: 'sync', 
           apiKey: API_KEY,
-          version: dbVersion.current,
+          version: new Date().getTime(), // Gunakan timestamp baru agar tidak ditolak oleh AppScript
+          user: currentUser ? currentUser.name : 'SYSTEM', // Mengirimkan identitas untuk Audit Log
           payload: db 
         })
       })
